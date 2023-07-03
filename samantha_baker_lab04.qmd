@@ -1,0 +1,378 @@
+---
+title: "Lab 04 for PQHS 432"
+author: "Samantha Baker"
+date: last-modified
+format: 
+  html:
+    toc: true
+    number-sections: true
+    code-fold: show
+    code-tools: true
+    code-overflow: wrap
+    embed-resources: true
+    date-format: iso
+    theme: default
+---
+
+## R Packages and Setup {.unnumbered}
+
+```{r}
+#| message: false
+#| warning: false
+
+knitr::opts_chunk$set(comment = NA) 
+
+library(janitor)
+library(naniar)
+library(Hmisc)
+library(equatiomatic)
+library(rms)
+library(broom)
+library(kableExtra)
+library(tidyverse)
+
+theme_set(theme_bw()) 
+```
+
+# Question 1 {.unnumbered}
+
+## Loading the Data {.unnumbered}
+
+I used the `read_csv` function to load the provided data set containing data on Ohio's 88 counties from the 2022 County Health Rankings report. The resulting `oh22` tibble contains data on 43 variables for all 88 counties.
+
+```{r}
+
+oh22 <- 
+  read_csv("https://raw.githubusercontent.com/THOMASELOVE/432-data/master/data/oh_counties_2022.csv", 
+           show_col_types = FALSE) |>
+  clean_names() |>
+  mutate(fips = as.character(fips))
+
+dim(oh22)
+
+```
+
+## Preliminary Data Work {.unnumbered}
+
+I used the `select` function to create tibble `oh22q1`, choosing only those variables I'll use in my models as well as some identifier variables. To build my logistic regression model, I will use `h2oviol` (presence of a water violation - yes or no), `sev_housing` (percent of county's households with at least one of the following housing problems: overcrowding, high cost, lack of kitchen, lack of plumbing), and `pm2_5` (average daily amount of fine particulate matter - mg/m^3^). I have no missing data and all values for my variables seem plausible.
+
+```{r}
+
+oh22q1 <- oh22 |>
+  select(fips, state, county, h2oviol, sev_housing, pm2_5) 
+
+describe(oh22q1)
+
+```
+
+I used `mutate` and `case_when` to convert the values of `h2oviol` to the following: (1) water violation present from "Yes" to "1"; (2) water violation absent from "No" to "0". 77.3% of Ohio counties have received a water violation and 22.7% of Ohio counties have not received a water violation.
+
+```{r}
+
+oh22q1<- oh22q1 |>
+  mutate(h2oviol = case_when(h2oviol=="Yes" ~ 1, 
+                               TRUE ~0))
+
+oh22q1 |> count(h2oviol) |>
+  mutate(percent = 100*n/ sum(n))
+
+```
+
+## Logistic regression model {.unnumbered}
+
+I used `glm` to create `model1`, a logistic regression model to predict `h2oviol` on the basis of `sev_housing` and `pm2_5` in the `oh22q1` data.
+
+```{r}
+
+model1 <- glm(h2oviol ~ sev_housing + pm2_5, data = oh22q1, 
+              family = "binomial" (link="logit"))
+
+extract_eq(model1, use_coefs = TRUE)
+
+```
+
+## Estimating Odds Ratio: `sev_housing` {.unnumbered}
+
+I used `tidy` to display the `model1` coefficient for `sev_housing` with a 90% confidence interval around the estimate. I also used `predict` to obtain fitted odds and probabilities for the example described below. The estimated odds ratio associated with `sev_housing` is .958 (90% CI .788, 1.148).
+
+```{r}
+
+tidy(model1, exponentiate = TRUE, conf.int = TRUE, conf.level = 0.90) |>
+  filter(term=="sev_housing") |>
+  select(term, estimate, std.error, conf.low, conf.high) |>
+  kable(digits = c(0,4,3,3,3)) |> 
+  kable_paper(bootstrap_options = "striped", full_width = F)
+
+```
+
+Suppose 11% of households in County A have housing problems while only 10% of households in County B have housing problems. Both counties have the same average daily amount of fine particulate matter (`pm2_5`). The estimated odds of a water violation for County A is .3150. The estimated odds of a water violation for County B is .3289. So the odds ratio is (.3150/.3289) or .958. The estimated odds of a water violation associated with County A is .958 times as large as the odds of a water violation associated with County B, holding `pm2_5` constant. That is, County A, with 1% more households with housing problems than County B, had a lower estimated odds of a water violation than County B. Granted, my estimated odds ratio is very close to 1 (which would indicate the same estimated probability of a water violation, regardless of housing problems) so I'd like to explore these variables more before drawing any strong conclusions.
+
+|              | `sev_housing` | `pm2_5`     | log odds of `h2oviol` | odds of `h2oviol` |
+|---------------|---------------|---------------|---------------|---------------|
+| **County A** | 11%           | 7.3 mg/m^3^ | -1.1554               | .3150             |
+| **County B** | 10%           | 7.3 mg/m^3^ | -1.1121               | .3289             |
+
+```{r}
+
+predict(model1, newdata = tibble(sev_housing=c(11, 10), pm2_5=c(7.3, 7.3)))
+
+exp(-1.155352)
+exp(-1.112123)
+
+exp(-1.155352)/exp(-1.112123)
+
+```
+
+# Question 2 {.unnumbered}
+
+## Loading the Data {.unnumbered}
+
+I used the `read_cvs` function to load the provided data set. The resulting `hbp3456` tibble contains data on 23 variables for 3,456 subjects.
+
+```{r}
+
+hbp3456 <- read_csv("https://raw.githubusercontent.com/THOMASELOVE/432-data/master/data/hbp3456.csv", 
+                    show_col_types = FALSE) |>
+  clean_names() |>
+  mutate(record = as.character(record))
+
+dim(hbp3456)
+ 
+```
+
+## Preliminary Data Work {.unnumbered}
+
+I created the `hbp` tibble by filtering for subjects who received care at one of four practices: (1) Center, (2) Elm, (3) Plympton, or (4) Walnut. I restricted my data set to include subjects with complete data for both `ldl` and `statin` variables. I selected only those variables that I plan to use in my models.
+
+I have data on 5 variables for 1,446 subjects. I have no missing data and all values for my variables seem reasonable. My subjects range in age from 25-80 years.
+
+```{r}
+
+hbp <- hbp3456 |>
+  filter(practice %in% c("Center", "Elm", "Plympton", "Walnut")) |>
+  filter(complete.cases(ldl, statin))  |>
+  select(record, practice, statin, ldl, age)
+
+describe(hbp) 
+
+```
+
+I used the `identical` function to check that the number of unique record IDs, `record`, matched the number of rows in my `hbp` tibble. I have a unique identifier for each row in my data set.
+
+```{r}
+
+identical(nrow(hbp), n_distinct(hbp$record))
+
+```
+
+I used `mutate` and `case_when` to convert the values of `statin` to the following: (1) current `statin` prescription from "Yes" to "1"; (2) no `statin` prescription from "No" to "0". 51.6% of my subjects have a current `statin` prescription while 48.4% of them do not.
+
+```{r}
+
+hbp <- hbp |>
+  mutate(statin = case_when(statin=="Yes" ~ 1, 
+                               TRUE ~0)) 
+
+hbp |> count(statin) |>
+  mutate(percent = 100*n/ sum(n))
+
+```
+
+## Logistic Regression Model: `mod1` {.unnumbered}
+
+I used `glm` to create `mod1`, a logistic regression model to predict `statin` on the basis of `ldl`, `practice`, and `age` in the `hbp` data. I added a restricted cubic spline with 4 knots on `age`.
+
+```{r}
+
+mod1 <- glm(statin ~ ldl + practice + rcs(age, 4), data=hbp, 
+              family = binomial(link = "logit"))
+
+extract_eq(mod1, use_coefs = TRUE, terms_per_line = 2, 
+           wrap = TRUE, ital_vars = TRUE)
+
+```
+
+## Logistic Regression Model: `mod2` {.unnumbered}
+
+I used `glm` to create `mod2`, a logistic regression model to predict `statin` on the basis of `ldl`, `practice`, and `age` in the `hbp` data. `mod2` includes an interaction term between `practice` and `ldl.` I added a restricted cubic spline with 4 knots on `age`.
+
+```{r}
+
+mod2 <- glm(statin ~ ldl + practice + rcs(age, 4) + practice %ia% ldl, 
+              data=hbp, family = binomial(link = "logit"))
+
+extract_eq(mod2, use_coefs = TRUE, terms_per_line = 1, 
+           wrap = TRUE, ital_vars = TRUE)
+
+```
+
+## `mod1` Coefficients {.unnumbered}
+
+I used `tidy` to display the `mod1` coefficients with 90% confidence intervals around the estimates.
+
+```{r}
+
+tidy(mod1, exponentiate = TRUE, conf.int = TRUE, conf.level = 0.90) |>
+  select(term, estimate, std.error,low90 = conf.low, high90 = conf.high, 
+         p = p.value) |>
+  kable(digits = c(0,4,3,3,3,3)) |> 
+  kable_paper(bootstrap_options = "striped", full_width = F)
+
+```
+
+## `mod2` Coefficients {.unnumbered}
+
+I used `tidy` to display the `mod2` coefficients with 90% confidence intervals around the estimates.
+
+```{r}
+
+tidy(mod2, exponentiate = TRUE, conf.int = TRUE, conf.level = 0.90) |>
+  select(term, estimate, std.error,low90 = conf.low, high90 = conf.high, 
+         p = p.value) |>
+  kable(digits = c(0,4,3,3,3,3)) |> 
+  kable_paper(bootstrap_options = "striped", full_width = F)
+
+```
+
+# Question 3 {.unnumbered}
+
+I used `tidy` to display the `mod1` coefficient for `ldl` with 90% confidence intervals around the estimate. The estimated odds ratio associated with `ldl` is .993 (90% CI .990, .995), holding all other predictors constant. I also used `predict` to obtain fitted odds and probabilities for the example described below.
+
+```{r}
+
+tidy(mod1, exponentiate = TRUE, conf.int = TRUE, conf.level = 0.90) |>
+  filter(term=="ldl") |>
+  select(term, estimate, std.error,low90 = conf.low, high90 = conf.high, 
+         p = p.value) |>
+  kable(digits = c(0,4,4,4,3,4)) |> 
+  kable_paper(bootstrap_options = "striped", full_width = F)
+
+```
+
+Suppose Harry and Sally are the same age and receive healthcare at the same practice but that Harry's LDL is 142 (75th percentile within the `hbp` data set) and Sally's LDL is 85 (25th percentile within the `hbp` data set). The estimated odds of a `statin` prescription for Harry is 0.4608. The estimated odds of a `statin` prescription for Sally is 0.6906. So, the odds ratio is (.4608/.6906) or .667. The estimated odds of Harry having a current `statin` prescription is .667 times as large as the estimated odds of Sally having a current `statin` prescription, holding all other predictors constant. There's a lower estimated probability that Harry has a current `statin` prescription than Sally.
+
+|       | `ldl`     | `practice` | `age` | log odds of `statin` | odds of `statin` |
+|-------|-----------|------------|-------|----------------------|------------------|
+| Harry | 142 mg/dL | Elm        | 40    | -.7748               | .4608            |
+| Sally | 85 mg/dL  | Elm        | 40    | -.3702               | .6906            |
+
+```{r}
+
+predict(mod1, newdata = tibble(ldl=c(142, 85), practice=c("Elm", "Elm"),
+                                                          age = c(40, 40)))
+
+exp(-0.7748072)
+exp(-0.3702326)
+
+exp(-0.7748072)/exp(-0.3702326)
+
+```
+
+# Question 4 {.unnumbered}
+
+I used `tidy` to display the `mod2` coefficient for `ldl` with a 90% confidence interval around the estimate. The estimated odds ratio associated with `ldl` is .991 (90% CI .986, .995), holding all other predictors constant.
+
+```{r}
+
+tidy(mod2, exponentiate = TRUE, conf.int = TRUE, conf.level = 0.90) |>
+  filter(term=="ldl") |>
+  select(term, estimate, std.error,low90 = conf.low, high90 = conf.high, 
+         p = p.value) |>
+  kable(digits = c(0,4,4,4,3,4)) |> 
+  kable_paper(bootstrap_options = "striped", full_width = F)
+
+```
+
+I created a data frame called `newdat1` containing data on eight hypothetical subjects - two at each individual level of `practice.` I used `augment` to obtain fitted odds for the examples described below, to illustrate the `ldl` main effect on the odds of `statin` prescription for each level of `practice` to examine the `ldl`-`practice` interaction in `mod2`.
+
+```{r}
+
+newdat1  <- data.frame(record = c("HarryC", "SallyC", "HarryE", "SallyE", 
+                                  "HarryP", "SallyP", "HarryW", "SallyW"), 
+                   practice = c("Center", "Center", "Elm", "Elm", "Plympton", 
+                                "Plympton", "Walnut", "Walnut"), 
+                   ldl = c(142,85, 142,85, 142,85, 142,85),
+                   age = c(40,40, 40,40, 40,40, 40,40))
+
+aug_newdat1 <- augment(mod2, newdata = newdat1, type.predict = "link") |>
+  mutate(odds = exp(.fitted)) |>
+  select(record, everything(), odds) |> 
+  kable() |>
+  kable_classic()
+
+aug_newdat1
+
+```
+
+## Odds ratio: Center Practice {.unnumbered}
+
+Suppose HarryC and SallyC are the same age and receive healthcare at the Center practice but that HarryC's LDL is 142 (75th percentile within the `hbp` data set) and SallyC's LDL is 85 (25th percentile within the `hbp` data set). The estimated odds of a `statin` prescription for HarryC is .3799. The estimated odds of a `statin` prescription for SallyC is .6489. So, the practice-specific odds ratio is (.3799/.6489) or .5855. The estimated odds of HarryC having a current `statin` prescription is .5855 times as large as the estimated odds of SallyC having a current `statin` prescription, holding all other predictors constant. There's a lower estimated probability that HarryC has a current `statin` prescription than SallyC.
+
+```{r}
+
+0.3799180/0.6489001
+
+```
+
+## Odds ratio: Elm Practice {.unnumbered}
+
+Suppose HarryE and SallyE are the same age and receive healthcare at the Elm practice but that HarryE's LDL is 142 (75th percentile within the `hbp` data set) and SallyE's LDL is 85 (25th percentile within the `hbp` data set). The estimated odds of a `statin` prescription for HarryE is .2680. The estimated odds of a `statin` prescription for SallyE is .8652. So, the practice-specific odds ratio is (.2680/.8652) or .3097. The estimated odds of HarryE having a current `statin` prescription is .3097 times as large as the estimated odds of SallyE having a current `statin` prescription, holding all other predictors constant. There's a lower estimated probability that HarryE has a current `statin` prescription than SallyE.
+
+```{r}
+
+0.2680443/0.8652488
+
+```
+
+## Odds ratio: Plympton Practice {.unnumbered}
+
+Suppose HarryP and SallyP are the same age and receive healthcare at the Plympton practice but that HarryP's LDL is 142 (75th percentile within the `hbp` data set) and SallyP's LDL is 85 (25th percentile within the `hbp` data set). The estimated odds of a `statin` prescription for HarryP is .1094. The estimated odds of a `statin` prescription for SallyP is .1415. So, the practice-specific odds ratio is (.1094/.1415) or .7732. The estimated odds of HarryP having a current `statin` prescription is .7732 times as large as the estimated odds of SallyP having a current `statin` prescription, holding all other predictors constant. There's a lower estimated probability that HarryP has a current `statin` prescription than SallyP.
+
+```{r}
+
+0.1093993/0.1414887
+
+```
+
+## Odds ratio: Walnut Practice {.unnumbered}
+
+Suppose HarryW and SallyW are the same age and receive healthcare at the Walnut practice but that HarryW's LDL is 142 (75th percentile within the `hbp` data set) and SallyW's LDL is 85 (25th percentile within the `hbp` data set). The estimated odds of a `statin` prescription for HarryW is .6896. The estimated odds of a `statin` prescription for SallyW is .5627. So, the practice-specific odds ratio is (.6896/.5627) or 1.225. The estimated odds of HarryW having a current `statin` prescription is 1.225 times larger as the estimated odds of SallyW having a current `statin` prescription, holding all other predictors constant. There's a higher estimated probability that HarryW has a current `statin` prescription than SallyW.
+
+```{r}
+
+0.6896063/0.5627201
+
+```
+
+# Question 5 {.unnumbered}
+
+I ran my two models again with the `lrm` function to create `mod1_lrm` and `mod2_lrm`. I set a seed and ran 40 bootstrap replications to perform resampling validation with the `validate` function. The two validated assessments of fit that I looked at were the C statistic (area under the curve) and the Nagelkerke R^2^. Accounting for optimism, my validation-corrected estimates for `mod1_lrm` (`mod1`) are C = 0.7082 and a Nagelkerke R^2^ of .1593. Accounting for optimism, my validation-corrected estimates for `mod2_lrm` (`mod2`) are C = 0.7207 and a Nagelkerke R^2^ of .1856. Both models do a fair job of discriminating between `statin` predictions based on the C statistic with `mod2` performing slightly better. The Nagelkerke R^2^ is also slightly improved for `mod2` over `mod1`. Based on these quality-of-fit measurements, I would choose `mod2`, the interaction model. There is some evidence to suggest that accounting for the `ldl`-`practice` interaction improves the model's effectiveness in predicting whether or not a subject has a current `statin` prescription.
+
+```{r}
+
+dd <- datadist(hbp)
+options(datadist="dd")
+
+mod1_lrm <- lrm(statin ~ ldl + practice + rcs(age, 4), data=hbp, 
+                x=TRUE, y=TRUE)
+  
+mod2_lrm <- lrm(statin ~ ldl + practice + rcs(age, 4) + practice %ia% ldl, 
+              data=hbp, x=TRUE, y=TRUE)
+
+set.seed(2023)
+
+validate(mod1_lrm, B=40)
+.5+(.4164/2)
+
+validate(mod2_lrm, B=40)
+.5+(.4413/2)
+
+```
+
+# Session Information {.unnumbered}
+
+```{r}
+
+xfun::session_info()
+
+```

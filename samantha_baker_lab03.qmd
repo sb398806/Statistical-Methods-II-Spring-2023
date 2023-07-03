@@ -1,0 +1,200 @@
+---
+title: "Lab 03 for PQHS 432"
+author: "Samantha Baker"
+date: last-modified
+format: 
+  html:
+    toc: true
+    number-sections: true
+    code-fold: show
+    code-tools: true
+    code-overflow: wrap
+    embed-resources: true
+    date-format: iso
+    theme: default
+---
+
+## R Packages and Setup {.unnumbered}
+
+```{r}
+#| message: false
+#| warning: false
+
+knitr::opts_chunk$set(comment = NA) 
+
+library(janitor)
+library(naniar)
+library(knitr)
+library(mosaic)
+library(rms)
+library(broom)
+library(kableExtra)
+library(tidyverse) 
+
+theme_set(theme_bw()) 
+```
+
+# Question 1 {.unnumbered}
+
+## Loading the Data {.unnumbered}
+
+I used the `read_cvs` function to load the provided data set. The resulting `hbp3456` tibble contains data on 23 variables for 3,456 subjects. I used the `identical` function to check that the number of unique record IDs, `record`, matched the number of rows in my `hbp3456` tibble. I have a unique identifier for each row in my data set.
+
+```{r}
+
+hbp3456 <- read_csv("https://raw.githubusercontent.com/THOMASELOVE/432-data/master/data/hbp3456.csv", show_col_types = FALSE) |>
+  clean_names() |>
+  mutate(record = as.character(record))
+
+dim(hbp3456)
+
+identical(nrow(hbp3456), n_distinct(hbp3456$record))
+
+```
+
+## Preliminary Data Work {.unnumbered}
+
+I used the `complete.cases` and `filter` functions to exclude subjects with missing values for `hsgrad` or `income.` I used the `select` function to include only those variables I will use to build my models: subject ID numbers (`record`), estimated median income of home neighborhood (`income`), estimated graduation rate for home neighborhood (`hsgrad`), race (`race`), whether the subject identifies as Hispanic/ Latino (`eth_hisp`), age (`age`), and tobacco use status (`tobacco`). I used the `mutate` function to create the `sqrtinc` variable and add it to my tibble. `sqrtinc`, the square root of estimated neighborhood income, will serve as the outcome variable for my regression models. My filtered tibble contains data on eight variables for 3,431 subjects.
+
+```{r}
+
+hbp3456 <-  hbp3456 |>
+  filter(complete.cases(income, hsgrad)) |>
+  select(record, income, hsgrad, race, eth_hisp, age, tobacco) |>
+  mutate(race = factor(race), eth_hisp = factor(eth_hisp), 
+         tobacco = factor(tobacco)) |>
+  mutate(sqrtinc = sqrt(income))
+
+dim(hbp3456)
+
+```
+
+I set a seed and used the `slice_sample` function to create a random sample of 1,000 subjects from the larger `hbp3456` tibble. `hbp_b` contains data on eight variables for those 1,000 subjects. My `hbp_b` tibble is displayed below.
+
+```{r}
+
+set.seed(432)
+
+hbp_b <- slice_sample(hbp3456, n = 1000)
+
+hbp_btable <- hbp_b |>
+  select(sqrtinc, hsgrad, race, eth_hisp, age, tobacco)
+
+hbp_b
+
+```
+
+I used the `miss_var_summary` to display a table of missing values for my five predictor variables as well as my outcome variable, `sqrtinc`. I have missing data for the following variables: `eth_hisp`, `race`, and `tobacco.`
+
+```{r}
+
+miss_var_summary(hbp_btable) |> 
+  kbl() |> kable_paper(bootstrap_options = "striped", full_width = F)
+
+```
+
+# Question 2 {.unnumbered}
+
+I used the `spearman2` function to display a Spearman ρ² plot to help identify which predictor might be a good choice for adding a non-linear term to my main effects model. I used all five predictor variables for my `sqrtinc` outcome in this plot to assess potential predictive punch. `hsgrad` has the largest adjusted squared Spearman ρ statistic (.558), followed by `race` (.298). The other variables are ranked significantly lower than `hsgrad` (all below .1). If my model turns out to need a non-linear term, `hsgrad` might be a good variable on which to spend some additional degrees of freedom. I am interested in considering a single non-linear term that adds exactly two degrees of freedom to the main effects model. I might consider either a cubic polynomial or a restricted cubic spline with four knots on `hsgrad.`  
+
+```{r}
+
+spear_hbp <- spearman2(sqrtinc ~ hsgrad + race + eth_hisp + age + tobacco, 
+                        data = hbp_b)
+
+plot(spear_hbp)
+
+spear_hbp
+
+```
+
+# Question 3 {.unnumbered}
+
+I used `ols` to fit `m1`, a main effects model for `sqrtinc` in my `hbp_b` sample, using all five predictor variables. ANOVA results confirm that I have eight total degrees of freedom in my model.
+
+```{r}
+
+dd <- datadist(hbp_b)
+options(datadist="dd")
+
+m1 <- ols(sqrtinc ~ hsgrad + race + eth_hisp + age + tobacco, data = hbp_b, 
+           x = TRUE, y = TRUE)
+
+anova(m1)
+
+```
+
+I used the `plot` and `summary` functions to obtain and display the effect summary for model `m1.` This displays the effect on `sqrtinc` of moving from the 25th percentile to the 75th percentile of each quantitative variable while holding the other variables constant. `hsgrad` is the estimated high school graduation rate for adults living in a subject's home neighborhood. The 25th percentile is a graduation rate of 75% and the 75th percentile is a gradation rate of 90%. If `hsgrad` moves from the 25th to the 75th percentile, the estimated effect on `sqrtinc` is an increase of 36.5 with a 95% confidence interval of (33.7, 39.3), while holding all other variables constant. In practical terms, this is an increase in estimated neighborhood median income of just over \$1,332.
+
+```{r}
+
+summary(m1)
+
+plot(summary(m1))
+
+36.5^2
+
+```
+
+# Question 4 {.unnumbered}
+
+I used `ols` to fit model `m2` for `sqrtinc` in my `hbp_b` sample using all five predictors plus a non-linear term on `hsgrad`. I chose to add a restricted cubic spline with 4 knots on `hsgrad` in order to keep my total degrees of freedom to no more than 10. ANOVA results confirm that I have 10 total degrees of freedom in my model.
+
+```{r}
+
+m2  <- ols(sqrtinc ~ rcs(hsgrad, 4) + race + eth_hisp + age + tobacco, 
+            data = hbp_b, x = TRUE, y = TRUE)
+
+anova(m2)
+
+```
+
+I used the `plot` and `summary` functions to obtain and display the effect summary for model `m2.` `tobacco` is a categorical variable with three levels describing a subject's tobacco use status (current, former, or never). If we compare subjects who are current smokers to subjects who are never smokers, the estimated effect on `sqrtinc` is a decrease of 7.18 with 95% confidence interval of (-11.6, -2.7), when all other predictors are held constant. In practical terms, this is a decrease in estimated neighborhood median income of \$51.50 for current smokers when compared to never smokers. If we compare subjects who are former smokers to subjects who are never smokers, the estimated effect on `sqrtinc` is a decrease of 3.31 with 95% confidence interval of (-7.3, .7), when all other predictors are held constant. In practical terms, this is a decrease in estimated neighborhood median income of just under \$11, although the confidence interval just crosses over 0 so I can't be sure this effect is detectably different from 0. 
+
+```{r}
+
+summary(m2)
+
+plot(summary(m2))
+
+(-7.18)^2
+(-3.31)^2
+
+```
+
+# Question 5 {.unnumbered}
+
+I used the `lm` and `glance` functions to obtain summary statistics for both `m1` and `m2.` Then, I validated each model's R² and mean squared error (MSE) values by setting a seed and using the `validate` function to run 40 bootstrapped replications. These results are displayed in the table below. 
+
+`m2`, with my non-linear term on `hsgrad`, performed better on every quality-of-fit and validation measure than `m1.` It is not surprising that `m2` has a larger R² value than `m1` as R² is greedy and has a tendency to increase as more predictors are added. In my random sample, `m2` accounted for 67.5% of the variation I observed in `sqrtinc`. AIC and BIC are both lower for `m2` than for `m1.` In addition to considering the model's performance in my random sample, I also validated my summary statistics to obtain optimism-corrected R² and MSE values. My corrected R² for `m2` was better than `m1`'s and only slightly less than its original R² value, accounting for 66.3% of the variation observed in `sqrtinc`. The MSE was also smaller for `m2.` Overall, `m2` performed better in predicting `sqrtinc` in my original random sample of 1,000 subjects as well as within the 40 bootstrapped resamples I used for model validation.
+
+## Summary Statistics and Validation Results {.unnumbered}
+
+| Model Name           | df  | R\^2 | AIC      | BIC      | corrected R\^2 | MSE    |
+|----------------------|-----|------|----------|----------|----------------|--------|
+| main effects (m1)    | 8   | .624 | 9126.345 | 9174.973 | .6134          | 816.03 |
+| + non-linear term (m2) | 10  | .675 | 8990.198 | 9048.551 | .6635          | 710.41 |
+
+
+```{r}
+
+mod1 <- lm(sqrtinc ~ hsgrad + race + eth_hisp + age + tobacco, data = hbp_b)
+
+mod2 <-lm(sqrtinc ~ rcs(hsgrad, 4) + race + eth_hisp + age + tobacco, data = hbp_b)
+
+glance(mod1)
+glance(mod2)
+
+set.seed(2023); validate(m1, method = "boot", B = 40) 
+
+set.seed(2023); validate(m2, method = "boot", B = 40)
+
+```
+
+# Session Information {.unnumbered}
+
+```{r}
+
+xfun::session_info()
+
+```

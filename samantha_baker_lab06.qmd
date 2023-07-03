@@ -1,0 +1,469 @@
+---
+title: "Lab 06 for PQHS 432"
+author: "Samantha Baker"
+date: last-modified
+format: 
+  html:
+    toc: true
+    number-sections: true
+    code-fold: show
+    code-tools: true
+    code-overflow: wrap
+    embed-resources: true
+    date-format: iso
+    theme: default
+editor: 
+  markdown: 
+    wrap: 72
+---
+
+## R Packages and Setup {.unnumbered}
+
+```{r}
+#| message: false
+#| warning: false
+
+knitr::opts_chunk$set(comment = NA) 
+
+library(mosaic)
+library(knitr)
+library(kableExtra)
+library(janitor)
+library(Hmisc)
+library(naniar) 
+library(survival) 
+library(countreg)
+library(MASS)
+library(lmtest)
+library(sandwich)
+library(yardstick)
+library(broom) 
+library(pscl)
+library(survminer)
+library(tidyverse) 
+
+theme_set(theme_bw()) 
+```
+
+# Question 1 {.unnumbered}
+
+## Loading the Data for Question 1 {.unnumbered}
+
+I used the `read_csv` function to load the provided data set and create tibble `rem` which contains data on initial remission times, in days, for 44 leukemia patients. Patients were randomly allocated to one of two treatments, either A or B, and the event of interest is remission. I added variable `remission` to the `rem` tibble using the `mutate` function. `remission` indicates either that a patient reached remission (1) or that they were right-censored before their remission time could be fully determined (0).
+
+```{r}
+
+rem <- read_csv("remission.csv", show_col_types = FALSE) 
+
+rem <- rem |>
+  mutate(remission = case_when(censored == 0 ~ 1, censored == 1 ~ 0))
+
+```
+
+## Some Numerical Summaries {.unnumbered}
+
+Of the 44 leukemia patients, 26 (59%) were allocated to Treatment A and 18 (41%) were allocated to Treatment B.
+
+```{r}
+
+rem |>
+  tabyl(treatment) |> kbl() |> kable_paper()
+
+```
+
+Seven patients were right-censored before their remission times could be fully determined - three subjects in Treatment A and four subjects in Treatment B. Thirty-seven patients reached initial remission.
+
+```{r}
+
+rem |>
+  filter(rem$censored==1)|> 
+  arrange(time) |> kbl() |> 
+  kable_paper() 
+
+```
+
+### Relationship between Time to Remission & Treatment Group {.unnumbered}
+
+For patients in Treatment A, the median time to remission was 31.5 days (IQR: 15.5 - 71 days). For patients in Treatment B, the median time to remission was 87 days (IQR: 15.5 - 167.25 days).
+
+```{r}
+
+favstats(time ~ treatment, data = rem) |> kbl() |> 
+  kable_paper()
+
+```
+
+## Building a Survival Object {.unnumbered}
+
+I created survival object `remsurv` to display the time to remission for each subject. Censoring is indicated with a `+` sign. If a subject's follow-up was right-censored, their remission time was not fully determined. For example, Subject 1's time to remission was 41 days and Subject 2's time to remission was 37 days. Subject 3's time to remission, on the other hand, was not fully determined before they were censored at 217 days, the latest time at which they were seen for follow-up. Seven of the 44 patients were censored.
+
+```{r}
+
+remsurv <- Surv(time = rem$time, event = rem$remission)
+
+head(remsurv, 4) 
+```
+
+## Building a Kaplan-Meier Estimate {.unnumbered}
+
+I used function `survfit` to build a Kaplan-Meier estimate which is printed below. Remission occurred in 37 of 44 subjects. Restricted mean time to remission is 87.2 days with an upper limit of 269 days (largest observed censored time before remission). The median time to remission is 41 days with lower and upper bounds on a 95% confidence interval of 28 days and 99 days, respectively.
+
+```{r}
+
+km_rem1 <- survfit(remsurv ~ 1)
+
+print(km_rem1, print.rmean=TRUE)
+
+```
+
+### Summary of Kaplan-Meier Estimate {.unnumbered}
+
+I used the `summary` function on my `km_rem1` Kaplan-Meier estimate to display a written summary.
+
+-   Up to 4 days, no patients had reached initial remission so 44
+    patients were still at risk. Then, my event of interest (remission)
+    occurred, and the estimated time-to-event probability was reduced
+    from 1 to .977 (95% CI: .934, 1).
+-   At 162 days, only 10 patients remained at risk for non-remission. 33
+    patients had reached initial remission and 1 patient had been
+    right-censored at 161 days. The estimated Pr(non-remission) starting
+    at 162 days is .225 (95% CI: .130, .391)
+
+```{r}
+
+summary(km_rem1)
+
+```
+
+## Comparing Time-to-Remission Across Treatment Groups {.unnumbered}
+
+Using the same `remsurv` survival object, I ran the `survfit` function to compare the remission survival functions for subjects across the two treatment groups.
+
+-   `Treatment = A`: Subjects were 26 leukemia patients randomly
+    assigned to Treatment A. We observed 23 patients who went into
+    initial remission. The estimated restricted mean survival time in
+    those subjects is 69.8 days and their estimated median survival time
+    is 31.5 days with lower and upper bounds on a 95% confidence
+    interval of 28 days and 74 days, respectively.
+
+-   `Treatment = B`: Subjects were 18 leukemia patients randomly
+    assigned to Treatment B. We observed 14 patients who went into
+    initial remission. The estimated restricted mean survival time in
+    those subjects is 110.9 days and their estimated median survival
+    time is 87 days with a lower bound on a 95% confidence interval of
+    20 days. An upper bound on the 95% CI could not be determined.
+
+```{r}
+
+km_rem2 <- survfit(remsurv ~ rem$treatment)
+
+print(km_rem2, print.rmean=TRUE)
+
+```
+
+### Building a Kaplan-Meier Plot {.unnumbered}
+
+I used `ggsurvplot` to build a Kaplan-Meier plot displaying the remission survival function estimates stratified by treatment group. The solid line indicates estimated remission probability at each time point (in days) with the ribbon around each line identifying the pointwise 95% confidence intervals. The steps down indicate remission events with the estimated probability of remission at 0 days starting at 1 and dropping down at points where at least one remission event is observed. The crosses indicate a patient who was censored before their initial remission time could be fully determined.
+
+From the plot, it appears that patients in both treatment groups had similar probabilities of remission up until about day 30. From there, patients in Treatment Group A seem to reach initial remission sooner than did the patients in Treatment Group B, with remission probabilities for the two groups converging again around day 220. Still, the confidence interval for Treatment Group B is quite wide across the entire plot and there's substantial overlap between the ribbons representing the confidence intervals for both treatment groups.
+
+```{r}
+
+ggsurvplot(km_rem2, data = rem,
+           conf.int = TRUE,
+           xlab = "Time in days",
+           ylab = "Remission Probability",
+           break.time.by = 20,
+           legend.labs = c("Treatment Group A", "Treatment Group B"),
+           risk.table = TRUE,
+           risk.table.height = 0.3,
+           pval = TRUE)
+
+```
+
+### Testing Difference between Two Survival Curves {.unnumbered}
+
+I used the `survdiff` function to obtain a log rank test, testing the null hypothesis that the remission survival functions are the same for both treatment groups at all values of $t$.
+
+When comparing the survival curves stratified by treatment group, the log rank test gives $p = .18$. The log rank test leads me to conclude that there is not actually a statistically significant difference between the remission survival curves for the two treatment groups.
+
+
+```{r}
+
+survdiff(remsurv ~ rem$treatment)
+
+```
+
+# Question 2 {.unnumbered}
+
+## Loading the Data for Question 2 {.unnumbered}
+
+I used the `read_csv` function to load the provided data set containing information on Ohio's 88 counties from the 2022 County Health Rankings report. The resulting `oh22` tibble contains data on 43 variables for 88 counties.
+
+```{r}
+
+oh22 <- read_csv("https://raw.githubusercontent.com/THOMASELOVE/432-data/master/data/oh_counties_2022.csv", show_col_types = FALSE) |>
+  clean_names() |>
+  mutate(fips = as.character(fips))
+
+dim(oh22)
+
+```
+
+## Preliminary Data Work {.unnumbered}
+
+I applied the `n_miss` function to `oh22`. I have no missing data to address.
+
+```{r}
+
+n_miss(oh22) |> kbl() 
+
+```
+
+I created tibble `oh86` which excludes Cuyahoga and Monroe Counties from my data set. These counties will be used later on to assess prediction quality for the two models I will develop. I converted `county` and `h2oviol` variables to factors. `oh86` contains data on 43 variables for 86 counties.
+
+```{r}
+
+oh86 <-  oh22 |>
+  mutate(county = factor(county), h2oviol = factor(h2oviol))|>
+  filter(county != "Cuyahoga")  |>
+  filter(county !="Monroe")
+
+dim(oh86)
+
+```
+
+### New Count Outcome Variable {.unnumbered}
+
+I used `mutate` to create indicator variables for four different county health standards including:
+
+-   `srohcount`: The percentage of adults reporting fair or poor health
+    (1 if below Ohio-wide mean of 18.1, otherwise 0)
+-   `obesecount`: The percentage of adults who report body mass index of
+    30 or higher (1 if below Ohio-wide average of 34.6, otherwise 0)
+-   `exercount`: The percentage of the population with access to places
+    for physical activity (1 if above Ohio-wide average of 77.2,
+    otherwise 0)
+-   `h2ocount`: The presence of a water violation in the past year (1 if
+    No, 0 if Yes)
+
+```{r}
+
+oh86 <- oh86 |>
+  mutate(srohcount = ifelse(sroh_fairpoor < 18.1, 1, 0)) |>
+  mutate(obesecount = ifelse(obese_pct < 34.6, 1, 0))|>
+  mutate(exercount = ifelse(exer_access > 77.2, 1, 0)) |>
+  mutate(h2ocount = ifelse(h2oviol =="No", 1, 0))
+
+```
+
+I used `rowSums` to create a new outcome variable `stansmet`, a count of the number of health standards each county meets. Among the 86 Ohio counties, 16 met none of the standards, 45 met one standard, 16 met two standards, and 5 counties met 3 of the standards. Only 4 counties met all of the standards.
+
+```{r}
+
+oh86$stansmet <- rowSums(oh86[, 44:47]) 
+
+describe(oh86$stansmet)
+
+var(oh86$stansmet)
+
+```
+
+## Poisson Regression Models {.unnumbered}
+
+I will build two models to predict `stansmet` in my development sample. `stansmet` is a count of the number of health standards each county meets and is restricted to values 0-4. `model1` will use five predictors and `model2` will use a subset of those variables.
+
+### Selecting My Predictors {.unnumbered}
+
+The five predictors I selected to predict my outcome variable, `stansmet`, include:
+
+-   `smoker_pct` - The percentage of adults who report currently smoking
+-   `age65plus` - The percentage of the population who are 65+ years of
+    age
+-   `inactive_pct` - The percentage of adults who report no leisure-time
+    physical activity
+-   `exc_drink` - The percentage of adults who report excessive drinking
+-   `insuff_sleep` - The percentage of the population who get
+    insufficient sleep
+
+I used `dfstats` to display numerical summaries for each of my predictor variables.
+
+```{r}
+
+df_stats(~ smoker_pct + age65plus + inactive_pct + exc_drink + insuff_sleep, data = oh86) |>
+  kable(digits = 1) |> kable_paper()
+
+```
+
+### `model1` {.unnumbered}
+
+I used `glm` to build `model1`, predicting `stansmet` in my development sample using five predictors. It looks like only `inactive_pct` has a 95% CI excluding 0.
+
+```{r}
+
+model1 <- glm(stansmet ~ smoker_pct + age65plus + inactive_pct + exc_drink + 
+                insuff_sleep, family = poisson(), data = oh86)
+
+summary(model1)
+
+confint(model1)
+
+```
+
+### `model2`: Subset of `model1` {.unnumbered}
+
+The two predictors I selected for `model2` include:
+
+-   `smoker_pct`
+-   `inactive_pct`
+
+I used `glm` to build `model2` to predict `stansmet` in my development sample using a subset of my original five predictors. As for `model1`, only `inactive_pct` has a 95% CI excluding 0.
+
+```{r}
+
+model2 <- glm(stansmet ~ smoker_pct + inactive_pct, family = poisson(),
+              data = oh86)
+
+summary(model2)
+
+confint(model2)
+
+```
+
+## Rootograms {.unnumbered}
+
+I used the `rootogram` function to visualize the fits of `model1` and `model2`. I observe almost no difference between these two visualizations. Both models underfit counts of 1 and 4 and overfit counts of 0 and 3. They both fit counts of 2 the best.
+
+```{r}
+
+rootogram(model1, max = 10)
+
+rootogram(model2, max = 10)
+
+```
+
+## Store Fitted Values and Residuals {.unnumbered}
+
+I used the `augment` function to store predictions within my `oh86` development sample to predict `stansmet` for each county using `model1.` Fitted values and residuals are displayed for the first six counties in the data set.
+
+```{r}
+
+model1aug <- augment(model1, oh86, type.predict = "response") 
+
+model1aug |> dplyr::select(county, stansmet, .fitted, .resid) |>
+  head() |>
+  kable(digits = 4) |> kable_paper()
+
+```
+
+I used the `augment` function to store predictions within my `oh86` development sample to predict `stansmet` for each county using `model2.` Fitted values and residuals are displayed for the first six counties in the data set.
+
+```{r}
+
+model2aug <- augment(model2, oh86, type.predict = "response") 
+
+model2aug |> dplyr::select(county, stansmet, .fitted, .resid) |>
+  head() |>
+  kable(digits = 4) |> kable_paper()
+
+
+```
+
+## Summarizing Development Sample Fit for `model1` & `model2` {.unnumbered}
+
+A summary of various fit measures is displayed below for `model1` and `model2`. `model1` performs better on two measures with a slightly larger $R^2$ value and a slightly lower RMSE. On MAE, `model2` performs slightly better.
+
+```{r}
+
+mets <- metric_set(rsq, rmse, mae)
+
+mod1summary <- mets(model1aug, truth = stansmet, estimate = .fitted) |>
+  mutate(model = "model1") |> relocate(model)
+
+mod2summary <- mets(model2aug, truth = stansmet, estimate = .fitted) |>
+  mutate(model = "model2") |> relocate(model)
+
+training_comp <- bind_rows(mod1summary, mod2summary)
+
+training_comp |> 
+  pivot_wider(names_from = model, values_from = .estimate) |> 
+  kable(digits = 4) |> kable_paper()
+
+```
+
+## Comparing Models: AIC, BIC {.unnumbered}
+
+I used `glance` and `bind_rows` to combine tibbles `temp_a` and `temp_b` that include key quality of fit measures for `model1` and `model2.` My `training_comp` table compares model performance within my development sample.
+
+`model2` performs better for both AIC and BIC measures.
+
+```{r}
+
+temp_a <- glance(model1) |> 
+  dplyr::select(-logLik, -deviance) |>
+  round(digits = 3) |>
+  mutate(modelname = "model1: 5 predictors")
+
+temp_b <- glance(model2) |>
+  dplyr::select(-logLik, -deviance) |>
+  round(digits = 3) |>
+  mutate(modelname = "model2: 2 predictors")
+
+training_comp <- bind_rows(temp_a, temp_b) |>
+  dplyr::select(modelname, nobs, AIC, BIC, everything())
+
+training_comp |> 
+  kable() |>
+  kable_paper()
+
+```
+
+## Selecting a Model {.unnumbered}
+
+I built two models to predict `stansmet`. `model1` included 5 predictor variables and `model2` was a subset of `model1`, including only two of the original five predictor variables. To summarize the performance of each model:
+
+-   `model1` performed better on the following measures: $R^2$, RMSE
+-   `model2` performed better on the following measures: MAE, AIC, BIC
+
+The rootogram visualizations of each model were almost indistinguishable, with only a very slight observable difference. My preferred model is `model2` because `model2` performed better on more measures of quality and fit and is also a simpler model.
+
+
+## Predict Cuyahoga & Monroe County Counts with `model2` {.unnumbered}
+
+I created a new tibble, `cm_data`, containing the necessary data for Cuyahoga County and Monroe County.
+
+```{r}
+
+cm_data <- tibble(county = c("Cuyahoga", "Monroe"), smoker_pct = c(21.5, 27.5), 
+                  inactive_pct = c(28.5, 32.6), stansmet = c(2, 1))
+
+cm_data
+
+```
+
+### Assess Prediction Quality {.unnumbered}
+
+I used `predict` to get predictions on the count results of `stansmet` for Cuyahoga and Monroe Counties. `model2` predicts that Cuyahoga County meets 1.51 health standards (2 if we round up) and that Monroe County meets .97 health standards (1 if we round up). In reality, Cuyahoga County did meet 2 of the county health standards and Monroe County met 1. The values for `stansmet` can only truly be integers between 0-4 and my fitted values are continuous rather than discrete. Still, the predictions are useful if we decide to round the predictions to the nearest integer. Rounding my `model2` fitted values was effective at predicting the standards being met, at least within my very small testing sample of two Ohio counties. 
+
+| County Name | \% Current Adults Smokers (**`smoker_pct`**) | \% Inactive Adults (**`inactive_pct`**) | Health Standards Met (`stansmet` observed) | Predicted `stansmet` (`.fitted`) | Standard Error |
+|------------|------------|--------------|------------|------------|------------|
+| Cuyahoga    | 21.5                                         | 28.5                                    | 2                                          | 1.51                             | .16            |
+| Monroe      | 27.5                                         | 32.6                                    | 1                                          | .97                              |  .20              |
+
+
+```{r}
+
+test1 <- predict(model2, newdata = cm_data, se.fit = TRUE, type = "response")
+
+test1
+
+```
+
+
+# Session Information {.unnumbered}
+
+```{r}
+
+xfun::session_info()
+
+```

@@ -1,0 +1,413 @@
+---
+title: "Lab 08 for PQHS 432"
+author: "Samantha Baker"
+date: last-modified
+format: 
+  html:
+    toc: true
+    number-sections: true
+    code-fold: show
+    code-tools: true
+    code-overflow: wrap
+    embed-resources: true
+    date-format: iso
+    theme: lux
+editor: 
+  markdown: 
+    wrap: 72
+---
+
+## R Packages and Setup {.unnumbered}
+
+```{r}
+#| message: false
+#| warning: false
+
+knitr::opts_chunk$set(comment = NA) 
+
+library(janitor)
+library(naniar)
+library(kableExtra)
+library(survival) 
+library(Hmisc)
+library(broom)
+library(rms)
+library(survminer)
+library(rsample)
+library(tidymodels)
+library(rstanarm)
+library(tidyverse) 
+
+theme_set(theme_bw()) 
+
+```
+
+
+# Question 1 {.unnumbered}
+
+## Loading the Data for Question 1 {.unnumbered}
+
+I used the `read_csv` function to load the provided data set containing information on 575 subjects who were selected from the UMARU IMPACT study (University of Massachusetts AIDS Research Unit, 1989-1994). I applied `clean_names` and used `mutate` to convert the `subject` code to a character variable and `treat` to a factor. I also converted `ivhx` and `hercoc` to factor variables with more meaningful labels. The resulting `umaru` tibble contains data on 12 variables for the 575 study subjects. My main objective is to compare the duration of two residential treatment programs (long vs short) in terms of their ability to reduce drug abuse and prevent high-risk HIV behavior.
+
+```{r}
+
+umaru <- read_csv("umaru.csv", show_col_types = FALSE) |>
+  clean_names() |>
+  mutate(subject = as.character(subject), treat = factor(treat), 
+         ivhx = fct_recode(factor(ivhx), "Never"="1", "Previous"="2", 
+                           "Recent" = "3"), 
+         hercoc = fct_recode(factor(hercoc), "Both" = "1", "Heroin" = "2", 
+                             "Cocaine" = "3", "Neither" = "4"))
+
+dim(umaru)
+
+```
+
+## Looking at the Data {.unnumbered}
+
+### Assess Missingness {.unnumbered}
+
+I applied the `n_miss` function to `umaru`. I have no missing data to address.
+
+```{r}
+
+n_miss(umaru)
+
+```
+
+### Numerical Summaries {.unnumbered}
+
+Subjects were about evenly split between the two treatment options with 286 subjects assigned to a long treatment program and 289 subjects assigned to a short treatment program. 464 subjects eventually returned to drug use (80.7%) and 111 subjects had not returned to drug use by the time they exited the study and were censored. Of those in long treatment programs, about 21.3% did not return to drug use before being censored. Of those in short treatment programs, about 17.3% did not return to drug use before being censored.
+
+```{r}
+
+umaru |>
+  tabyl(treat, censor) |> 
+  adorn_totals(c("row", "col"))|>   
+  adorn_percentages("row")|> 
+  adorn_pct_formatting(rounding = "half up", digits = 1) |>
+  adorn_ns() |>
+  adorn_title("combined")|> 
+  kable() |> kable_paper(full_width = F)
+
+```
+
+
+## Fitting a Cox Model {.unnumbered}
+
+Using the `umaru` data, I created a survival object to display the time to return to drug use for each subject and whether or not a subject's follow up was censored before that recurrent event. Censoring is indicated with a `+` sign. For example, Subject 3 was drug-free for 84 days before they had a relapse and Subject 4 had 300 days of sobriety before returning to drug use. Subject 5, on the other hand, had not returned to drug use before being censored at 554 days, the last time they were seen for follow-up.
+
+```{r}
+
+umaru$S <- Surv(umaru$time, umaru$censor)
+
+umaru$S |> head(10)
+
+```
+
+### Main Effects Model  {.unnumbered}
+
+I used `coxph` to build `modelA`, a Cox model predicting the time to return to drug use, using `treat` as a predictor and including the main effects of the rest of the available predictors. `modelA` uses 11 degrees of freedom.
+ 
+```{r}
+
+modelA <- coxph(S ~ treat + age + beck + hercoc + ivhx + ndrugtx + race + site, 
+                data = umaru, model=TRUE)
+
+modelA
+
+```
+
+### Assessing Non-Linearity {.unnumbered}
+
+I used the `spearman2` function to display a Spearman $ρ^2$ plot to help identify the predictor(s) to which I might want to apply a non-linear term in my main effects model. I used all eight predictor variables for my `time` outcome in this plot to assess potential predictive punch. `ivhx` has the largest adjusted squared Spearman $ρ$ statistic (.018), followed by `treat` (.015). I am interested in spending a total of 13 degrees of freedom and `ivhx` is a multi-categorical predictor, so I will create an interaction term between `ivhx` and `treat` in my new model.
+
+```{r}
+
+spear_umaru <- spearman2(time ~ treat + age + beck + hercoc + ivhx + 
+                           ndrugtx + race + site, data=umaru)
+
+plot(spear_umaru)
+
+spear_umaru
+
+```
+
+### `ModelB`: Include Interaction Term  {.unnumbered}
+
+I used `coxph` to build `modelB`, a Cox model predicting the time to return to drug use. `modelB` includes all of the predictors from `modelA` in addition to an interaction term between `ivhx` and `treat`. `modelB` uses 13 degrees of freedom.
+
+```{r}
+
+modelB <- coxph(S ~ age + beck + hercoc + ndrugtx + race + 
+                  site + ivhx*treat, data = umaru) 
+
+modelB
+
+```
+
+I used `tidy` on `modelB` to summarize its fit. The hazard ratio estimate for `treat` implied by `modelB` is 1.33 for subjects in the short treatment program as compared to those in the long treatment program with a 95% CI (.98, 1.81), while holding all other predictors constant. 
+
+In general, the point estimate of the hazard ratio indicates that those in the short treatment program have a greater risk of returning to drug use sooner when compared with those in the long treatment program. For example, if Jack was in the short treatment program and Jill was in the long treatment program, then Jack's hazard of returning to drug use sooner is 1.33 times greater than Jill's, provided they were the same along the other predictors (age, race, treatment location, Beck Depression score, and history of drug use and previous drug treatment). The 95% confidence interval only just includes 1. From `modelB`, I don't observe that treatment duration had a strong effect on subjects' time to return to drug use.
+
+```{r}
+
+tidy(modelB, exponentiate = TRUE, conf.int = TRUE, conf.level = 0.95)|> 
+  kbl() |> kable_paper(full_width = F)
+
+```
+
+
+# Question 2 {.unnumbered}
+
+## Assessing Quality of Fit {.unnumbered}
+
+I also fit `modelB` using `cph` to display and assess quality of fit measures. At .083, the $R^2$ reflects a very slight improvement over a model fit with an intercept term alone. The Somers' $Dxy$ index is .202 which corresponds with a C statistic of .60, indicating that this model does a poor job of predicting the time to return to drug use. 
+
+```{r}
+#| warning: false
+
+units(umaru$time) <- "day"
+
+d <- datadist(umaru)
+options(datadist = "d")
+
+umarusurv <- Surv(time = umaru$time, event = umaru$censor)
+
+modB <- cph(umarusurv ~ treat + age + beck + hercoc + ndrugtx + race + ivhx +
+                  site + ivhx*treat, data = umaru, x = TRUE, y = TRUE, 
+            surv = TRUE)
+
+modB
+
+.5 + (.202/2)
+
+```
+
+## Assessing Adherence to Proportional Hazards Assumptions  {.unnumbered}
+
+I used `cox.zph` and `ggcoxzph` to assess `modelB`'s adherence to the assumptions of a proportional hazards model. Displayed below are plots of the scaled Schoenfeld residuals, results from a global test (.641), and results from the separate tests for each predictor. From these results, it appears that the proportional hazards assumption is appropriate. I don't see any slopes that are very different from zero in the residuals when plotted against time.
+
+```{r}
+
+ggcoxzph(cox.zph(modB), var = c("treat", "age"))
+
+ggcoxzph(cox.zph(modB), var = c("beck", "hercoc"))
+
+ggcoxzph(cox.zph(modB), var = c("ivhx", "ndrugtx"))
+
+ggcoxzph(cox.zph(modB), var = c("race", "site"))
+
+ggcoxzph(cox.zph(modB), var = c("treat:ivhx"))
+
+```
+
+## Validating Summary Statistics  {.unnumbered}
+
+I set a seed to `validate` the summary statistics for `modelB` and display optimism-corrected $R^2$ and Somers' $Dxy$ indices. The original $R^2$ for `modelB` was .083 and the validated $R^2$ is .048. The original Somers' $Dxy$ was .202 and the validated $Dxy$ is .164 (corresponding to a C statistic of .583). `ModelB` performed somewhat worse during validation than with my original data, which is to be expected, but given its poor performance already, validation further confirmed that `modelB` isn't particularly effective at predicting time to return to drug use.
+
+```{r}
+
+set.seed(41423)
+
+validate(modB)
+
+.5 + (.1654/2)
+
+```
+
+
+# Question 3 {.unnumbered}
+
+## Loading the Data for Question 3 {.unnumbered}
+
+I used the `read_csv` function to load the provided data set. I applied `clean_names` and used `mutate` to convert the `record` ID to a character variable and `insurance` to a factor. I selected only those variables I plan to use in my models. The resulting `hbp3456` tibble contains data on 5 variables for the 3456 study subjects.  My main objective is to build two models in order to predict systolic blood pressure (`sbp`) using three variables: `age`, `weight`, and primary `insurance` type.
+
+```{r}
+
+hbp3456 <- read_csv("https://raw.githubusercontent.com/THOMASELOVE/432-data/master/data/hbp3456.csv", 
+                    show_col_types = FALSE) |>
+  clean_names() |>
+  mutate(record = as.character(record)) |>
+  mutate(insurance = factor(insurance)) 
+
+hbp3456 <- hbp3456 |>
+  select(record, age, weight, insurance, sbp)
+
+dim(hbp3456)
+
+```
+
+## Assess Missingness {.unnumbered}
+
+I applied the `miss_var_summary` function to `hbp3456`. I have missing data in my `weight` variable that I will address.
+
+```{r}
+
+miss_var_summary(hbp3456)
+
+```
+
+
+## Creating Training & Testing Samples {.unnumbered}
+
+I set a seed and used the `initial_split` function to create a training sample (`hbp_train`) consisting of 70% of the subjects from my original data set, and `hbp_test`, a testing sample composed of the remaining 30% of my subjects. I used stratified sampling on my `insurance` variable to ensure similar distributions of `insurance` across the training and testing samples.
+
+```{r}
+
+set.seed(2023)
+
+hbp_split <- initial_split(hbp3456, prop = .7, strata = insurance)
+
+hbp_train <- training(hbp_split)
+ 
+hbp_test <- testing(hbp_split)
+
+```
+
+
+I used the `identical` function to check that the number of unique record IDs matched the number of rows in my `hbp_train` and `hbp_test` tibbles. I have the number of subjects I expected in each sample and each subject code is unique.
+
+```{r}
+
+dim(hbp_train)
+
+identical(nrow(hbp_train), n_distinct(hbp_train$record))
+
+dim(hbp_test)
+
+identical(nrow(hbp_test), n_distinct(hbp_test$record))
+
+```
+
+I used `tabyl` to display the distributions of `insurance` in my training and testing samples to check that my stratification along `insurance` worked. I have very similar percentages of subjects at every level of `insurance` within my two samples.
+
+```{r}
+
+hbp_train |> tabyl(insurance) |> kable() |> kable_paper(full_width = F)
+
+hbp_test |> tabyl(insurance) |> kable() |> kable_paper(full_width = F)
+
+```
+
+
+## Creating Workflows {.unnumbered}
+
+I built a `recipe` for pre-processing my predictors and establishing the roles of my variables that will work for the two models I plan to create. Using  my training data set, this recipe imputes missing values for predictor `weight`, centers my `sbp` outcome, normalizes all of my predictors, and uses indicator variables for any factors. This recipe will be used for both `model1` and `model2` which will both use the same three variables to predict `sbp` in my training sample.
+
+```{r}
+
+hbp_rec <-
+  recipe(sbp ~ age + weight + insurance, data = hbp_train) |>
+  step_impute_bag(weight) |>
+  step_center(sbp) |>
+  step_dummy(all_nominal())|>
+  step_normalize(all_predictors())
+
+```
+
+
+### Workflow Using `lm` Modeling Engine {.unnumbered}
+
+For `model1`, I created a workflow, `model1_wf`, that uses the `lm` modeling engine.
+
+```{r}
+
+model1 <- linear_reg() |> set_engine("lm")
+
+model1_wf <- workflow() |>
+    add_model(model1) |>
+    add_recipe(hbp_rec)
+
+```
+
+
+### Workflow Using `stan` Modeling Engine {.unnumbered}
+
+For `model2`, I set a seed and created a revised workflow, `model2_wf`, that uses a Bayesian approach with the `stan` modeling engine to fit the same model from the `lm` approach above. I used a Student t-distribution with 1 degree of freedom for the intercept term and a Normal distribution with mean 0 and variance 4 for each of the predictors.
+
+```{r}
+
+set.seed(2023)
+
+prior_dist_int <- student_t(df = 1)
+
+prior_dist_preds <- normal(0, 2)
+
+model2 <- linear_reg() |> 
+    set_engine("stan",
+               prior_intercept = prior_dist_int,
+               prior = prior_dist_preds)
+
+model2_wf <- workflow() |>
+    add_model(model2) |>
+    add_recipe(hbp_rec)
+
+```
+
+
+## Fitting Two Models {.unnumbered}
+
+I `fit` the `lm` and `stan` models to the `hbp_train` data and displayed the results below for each. For `fit1`, we can see the four preprocessing steps and the coefficients for `model1`. I used `tidy` to display the coefficients with confidence intervals for `fit1` as well.
+
+```{r}
+
+fit1 <- fit(model1_wf, hbp_train)
+
+fit1
+
+lmcoefs_mod1 <- tidy(fit1, conf.int = TRUE) |>
+    select(term, estimate, std.error, conf.low, conf.high) |>
+    mutate(mod = "lm")
+
+lmcoefs_mod1 |> kbl() |> kable_paper(full_width = F)
+
+```
+
+
+I set a seed for `fit2` which displays the same four preprocessing steps as `fit1` in addition to the medians and mean absolute deviations for my predictors. I used `broom.mixed::tidy` to display the coefficients with confidence intervals for `fit2` as well.
+
+```{r}
+
+set.seed(43202)
+
+fit2 <- fit(model2_wf, hbp_train)
+
+fit2
+
+standcoefs_mod2 <- broom.mixed::tidy(fit2, conf.int = TRUE) |>
+    select(term, estimate, std.error, conf.low, conf.high) |>
+    mutate(mod = "stan")
+
+standcoefs_mod2 |> kbl() |> kable_paper(full_width = F)
+
+```
+
+
+## Comparing Coefficients of Fits {.unnumbered}
+
+I used `bind_rows` to compare the coefficients for `model1` and `model2` and `ggplot` to display a graph of the results. My `lm` model coefficients are displayed in red and my `stan` model coefficients are displayed in blue. For each of the variables included in my two models, I have a point estimate and 95% confidence intervals around those estimates. In general, the point estimates are almost the same. For `model2`, which used a Bayesian approach with the `stan` modeling engine, I have slightly narrower confidence intervals than I have for `model1` which used the `lm` modeling engine. This occurs because the `stan` modeling engine allowed me to set some prior information about the distributions of the intercept and predictor terms. 
+
+```{r}
+
+coefscomp <- bind_rows(lmcoefs_mod1, standcoefs_mod2) 
+
+ggplot(coefscomp, aes(x = term, y = estimate, col = mod,
+                       ymin = conf.low, ymax = conf.high)) +
+  geom_point(position = position_dodge2(width = .4)) +
+  geom_pointrange(position = position_dodge2(width = .4)) +
+  geom_hline(yintercept = 0, lty = "dashed") +
+  coord_flip() +
+  labs(x = "", y = "Estimate (with 95% CIs)",
+    title = "Comparing lm and stan Model Coefficients")
+
+```
+
+
+# Session Information {.unnumbered}
+
+```{r}
+
+xfun::session_info()
+
+```

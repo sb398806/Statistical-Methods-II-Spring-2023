@@ -1,0 +1,382 @@
+---
+title: "Lab 07 for PQHS 432"
+author: "Samantha Baker"
+date: last-modified
+format: 
+  html:
+    toc: true
+    number-sections: true
+    code-fold: show
+    code-tools: true
+    code-overflow: wrap
+    embed-resources: true
+    date-format: iso
+    theme: default
+editor: 
+  markdown: 
+    wrap: 72
+---
+
+## R Packages and Setup {.unnumbered}
+
+```{r}
+#| message: false
+#| warning: false
+
+knitr::opts_chunk$set(comment = NA) 
+
+library(kableExtra)
+library(janitor) 
+library(naniar)
+library(Hmisc)
+library(GGally)
+library(car)
+library(rms)
+library(MASS)
+library(scales)
+library(ggformula)
+library(tidyverse) 
+
+theme_set(theme_bw()) 
+
+```
+
+# Question 1 {.unnumbered}
+
+## Loading the Data for Question 1 {.unnumbered}
+
+I used the `read_csv` function to load the provided data set containing information on Ohio's 88 counties from the 2022 County Health Rankings report. I applied `clean_names` and used `mutate` to make sure the FIPS code for each county was a character variable. The resulting `oh22` tibble contains data on 43 variables for 88 counties. 
+
+```{r}
+
+oh22 <- read_csv("https://raw.githubusercontent.com/THOMASELOVE/432-data/master/data/oh_counties_2022.csv", 
+                 show_col_types = FALSE) |>
+  clean_names() |>
+  mutate(fips = as.character(fips))
+
+dim(oh22)
+
+```
+
+## Preliminary Data Work {.unnumbered}
+
+### Assess Missingness {.unnumbered}
+
+I applied the `n_miss` function to `oh22`. I have no missing data to address.
+
+```{r}
+
+n_miss(oh22) |> kbl() 
+
+```
+
+### Development Sample: `oh86` {.unnumbered}
+
+I created tibble `oh86` which excludes Cuyahoga and Monroe Counties from my data set. These counties will be used later to assess prediction quality for the model I build. I also converted `county` to a factor. `oh86` contains data on 43 variables for 86 counties.
+
+```{r}
+
+oh86 <-  oh22 |>
+  mutate(county = factor(county))|>
+  filter(county != "Cuyahoga")  |>
+  filter(county !="Monroe")
+
+dim(oh86)
+
+```
+
+## Outcome Variable: `yearslostcat` {.unnumbered}
+
+My outcome variable is `yearslostcat`, an ordered multicategorical variable with 3 categories. I used `mutate` to create `yearslostcat` from `years_lost_rate`, the rate of age-adjusted  years of potential life lost (YPLL) per 100,000 population. This measures a county's rate of premature mortality. 
+
+I used `case_when` and `fct_relevel` to create the following levels within `yearslostcat`:
+
+-   Low: \< 8,000 YPLL per 100,000 population
+-   Middle: 8,000 to \<10,000 YPLL per 100,000 population
+-   High: 10,000+ YPLL per 100,000 population
+
+I used `is.ordered` to ensure that my outcome is an ordered factor.
+
+```{r}
+
+oh86 <- oh86 |>
+  mutate(yearslostcat = case_when(years_lost_rate < 8000 ~ "low",
+                                  years_lost_rate < 10001 ~ "middle",
+                                  TRUE ~ "high")) |>
+  mutate(yearslostcat = fct_relevel(yearslostcat, "low", "middle", "high"), 
+         yearslostcat = factor(yearslostcat, ordered = TRUE))
+
+is.ordered(oh86$yearslostcat)
+
+```
+
+
+### Numerical Summaries {.unnumbered}
+
+The range for `years_lost_rate` is 4,212 to 15,419 YYPL per 100,000 population with a mean of 8,783 YYPL. From my sample of 86 Ohio counties, 29 fall into the Low `yearslostcat` category, 36 in the  Middle category, and 21 in the High category.
+
+```{r}
+
+describe(oh86$years_lost_rate)
+
+describe(oh86$yearslostcat)
+
+```
+
+### Bar Chart {.unnumbered}
+
+I used `ggplot` to display a bar chart of the classifications in my `yearslostcat` outcome. 33.7% of the Ohio counties in my `oh86` development sample fall into the Low YYPL category, 41.9% of counties are in the Middle YYPL category, and 24.4% of counties fall into the High YYPL category.
+
+```{r}
+
+ggplot(oh86, aes(x = yearslostcat, fill = yearslostcat)) + 
+    geom_bar(aes(y = 
+        (after_stat(count)/sum(after_stat(count))))) +
+    geom_text(fontface = "bold", aes(y = 
+        (after_stat(count))/sum(after_stat(count)), 
+          label = scales::percent((after_stat(count)) / 
+                            sum(after_stat(count)))),
+              stat = "count", vjust = 1.5, 
+              color = "white", size = 5) +
+  scale_x_discrete(labels=c('Low: <8000', 'Middle: 8000 - 10000', 
+                            'High: >10000')) +
+    scale_y_continuous(labels = percent) +
+    scale_fill_brewer(palette = "Set2") +
+    guides(fill="none") + 
+    labs(title = "Premature Death Classifications from CHR 2022", 
+         subtitle = "in 86 Ohio counties, using age-adjusted years of potential life lost (per 100K population)",
+         y = "Percentage", 
+         x = "YYPL Classifications")
+
+```
+
+## Scatterplot Matrix {.unnumbered}
+
+I used `ggpairs` to display a scatterplot matrix of my `yearslostcat` outcome and potential predictor variables. The plots highlight the correlations that are worth further exploration before building my models. All but one variable pairing is highlighted, with the strongest correlations between `obese_pct`-`smoker_pct` (.578) and `lbw_pct`-`unemployed` (.529). Each highlighted correlation is generally considered weak to moderate but I will check for collinearity issues anyway by estimating the variance inflation factors (VIFs) between my predictors.
+
+```{r}
+#| message: false
+#| warning: false
+
+ggpairs(oh86 |> 
+      dplyr::select(smoker_pct, unemployed, obese_pct, lbw_pct, yearslostcat))
+
+```
+
+
+## Numerical Summaries: Predictors {.unnumbered}
+
+I used `dfstats` to display a table of numerical summaries for each of the predictor variables I plan to use in my model.
+
+-   `smoker_pct`: the percentage of adults in a county who report currently smoking
+-   `unemployed`: the percentage of individuals over 15 years of age who are unemployed and looking for work
+-   `obese_pct`: the percentage of adults in a county who report a body-mass index (BMI) of 30 kg/m^2^ or higher
+-   `lbw_pct`: the percentage of a births with low birth weight (\<2,500g) within a county
+
+```{r}
+
+df_stats(~ smoker_pct + unemployed + obese_pct + lbw_pct, data = oh86) |>
+  kable(digits = 1) |> kable_paper(full_width = FALSE)
+
+```
+
+
+## Fit `modelA` {.unnumbered}
+
+I used `polr` to fit `modelA`. A model summary is included below. `modelA` contains two intercepts, covering the three levels of `yearslostcat` and four slopes (one for each predictor). I also used `lrm` to fit `modelA_lrm`. `modelA` uses proportional odds logistic regression to predict `yearslostcat` on the basis of `smoker_pct`, `unemployed`, `obese_pct`, and `lbw_pct`. 
+
+I ran `car::vif` to see if I needed to address any collinearity issues between my predictors. The VIF is largest for `smoker_pct` however none of the values are above 5 so I'm comfortable concluding that collinearity is not a big concern.
+
+The Nagelkerke’s $R²$ value shows a good amount of improvement over a null model at .743 and the C statistic (.927) indicates a strong model with excellent discrimination in predicting `yearslostcat`.
+
+```{r}
+
+d <- datadist(oh86)
+options(datadist = "d")
+
+modelA_lrm <- lrm(yearslostcat ~ smoker_pct + unemployed + obese_pct + lbw_pct, 
+              data = oh86, x = T, y = T)
+
+modelA <- polr(yearslostcat ~ smoker_pct + unemployed + obese_pct + lbw_pct, 
+               data = oh86, Hess = TRUE)
+
+summary(modelA)
+
+modelA_lrm
+
+car::vif(modelA)
+
+```
+
+## Interpreting `modelA` Effect Sizes {.unnumbered}
+
+I used `exp(coef())` and `exp(confint())` functions to exponentiate `modelA`'s output and interpret the effects of my predictors on `yearslostcat`:
+
+-   Increasing `smoker_pct` by 1%, while holding the other predictors constant, is associated with increasing the odds of higher values of `yearslostcat` by a factor of 2.0 with 95% CI (1.49, 2.82). Increasing the percentage of smokers in Ohio counties is associated with increasing odds of higher levels of premature deaths in that county.
+
+-   Increasing `unemployed` by 1%, while holding the other predictors constant, is associated with increasing the odds of higher values of `yearslostcat` by a factor of 1.60 with 95% CI (.95, 2.85). Increasing the percentage of unemployed individuals (over the age of 15) in Ohio counties is associated with increasing odds of higher levels of premature deaths in that county.
+    
+-   Increasing `obese_pct` by 1%, while holding the other predictors constant, is associated with increasing the odds of higher values of `yearslostcat` by a factor of 1.08 with 95% CI (.83, 1.43). Increasing the percentage of the adult population with BMI greater than 30 kg/m^2^ in Ohio counties is associated with increasing odds of higher levels of premature deaths in that county.
+
+-   Increasing `lbw_pct` by 1%, while holding the other predictors constant, is associated with increasing the odds of higher values of `yearslostcat` by a factor of 4.35 with 95% CI (2.39, 8.89). Increasing the percentage of babies born at low birth weights in Ohio counties is associated with increasing odds of higher levels of premature deaths in that county.
+
+The 95% confidence intervals around the estimated odds ratios for `smoker_pct` and `lbw_pct` are entirely above 1, indicating that the odds of having larger (worse) rates of `yearslostcat` is detectably higher for Ohio counties as their percentages of current smokers and low birth weights increase. While `modelA` predicts that increasing percentages of unemployment and obesity in Ohio counties is associated with higher levels of `yearslostcat`, the effects appear modest and the 95% confidence intervals around the estimated odds ratios for `unemployed` and `obese_pct` include 1. 
+
+```{r}
+
+exp(coef(modelA))
+
+exp(confint(modelA))
+
+```
+
+## Quality of Fit {.unnumbered}
+
+I validated `modelA`'s Nagelkerke $R²$ value and C statistic by setting a seed and using the `validate` function to run 40 bootstrapped replications. My results are displayed in the table below.
+
+```{r}
+
+set.seed(4158)
+
+validate(modelA_lrm, method = "boot", B = 40)
+
+.5+(0.8297/2)
+
+```
+
+
+### Summary Statistics and Validation Results {.unnumbered}
+
+The corrected Nagelkerke's $R²$ shows a good amount of improvement over a null model at .71 and the corrected C statistic (.91) indicates a strong model with excellent discrimination in predicting `yearslostcat`.
+
+| Model Name | df  | R\^2  | C statistic |   AIC    | Corrected R\^2 | Corrected C statistic |
+|:-----------:|:--------:|:--------:|:--------:|:--------:|:--------:|:--------:|
+|  `modelA`  |  4  | 0.743 |    0.927    | 105.1202 |     0.7062     |        0.91485        |
+
+
+### Predicting `yearslostcat` in Cuyahoga & Monroe Counties {.unnumbered}
+
+I created a new tibble, `cm_data`, containing the necessary data for Cuyahoga County and Monroe County. I used `modelA` to to predict `yearslostcat` for both counties. The predicted probabilities are summarized in the table below. Cuyahoga County has a higher predicted probability of High values of `yearslostcat` (10,000+ YYPL). Cuyahoga has a higher predicted probability than Monroe County of falling into the High YYPL category and a lower probability of falling into the Middle or Low YYPL categories than Monroe County. On average, Cuyahoga County is predicted to have higher rates of premature mortality than Monroe County.
+
+Monroe County has a higher predicted probability of High values of `yearslostcat` (10,000+ YYPL). Monroe County has a higher predicted probability than Cuyahoga of falling into the Middle or Low YYPL categories and a lower probability of falling into the High YYPL category than Cuyahoga County. On average, Monroe County is predicted to have lower rates of premature mortality than Cuyahoga County.
+
+In reality, Cuyahoga County's YYPL rate is 9,175 per 100,000 population, placing it in the Middle category, and Monroe County's YYPL rate is 7,942 per 100,000 population, placing it in the Low category. At least for these two counties, `modelA` missed the mark. It was closer for Cuyahoga County with it's actual YYPL rate being close to a cut-off point (10,000) but Monroe County was misclassified as having a High YYPL rate when it actually fell into the Low category. For this analysis, I aimed to have similar numbers of counties in each category. I would be interested in exploring other cut-off points for my `yearslostcat` variable to see how that impacts my model.  
+
+```{r}
+
+cm_data <- tibble(county = c("Cuyahoga", "Monroe"), smoker_pct = c(21.5, 27.5), 
+                  unemployed = c(10.4, 10.6), obese_pct = c(36.7, 36.9), 
+                  lbw_pct = c(10.7, 7.3))
+
+testA <- predict(modelA, newdata = cm_data, se.fit = TRUE, type = "p")
+
+testA
+
+```
+| County | smoker_pct  | unemployed  | obese_pct |   lbw_pct    |
+|:-----------:|:--------:|:--------:|:--------:|:--------:|
+|  Cuyahoga  |  21.5  | 10.4 |    36.7    | 10.7 |
+|  Monroe  |  27.5  | 10.6 |    36.9    | 7.3 |
+
+
+| County | years_lost_rate  | Pr(low)  | Pr(middle) |   Pr(high)    |
+|:-----------:|:--------:|:--------:|:--------:|:--------:|
+|  Cuyahoga  |  9175  | .3 |    23.1    | 76.5 |
+|  Monroe  |  7942  | .7 |    38.4    | 60.8 |
+
+
+
+# Question 2 {.unnumbered}
+
+## Loading the Data for Question 2 {.unnumbered}
+
+I used the `read_csv` function to load the provided data set containing information on 1,000 animal subjects included in an observational study. The resulting `lab7q2` tibble contains data on 6 variables for those 1,000 animals. I applied `clean_names` and used `mutate` to make sure the `subject` code for each animal was a character variable.
+
+```{r}
+
+lab7q2 <- read_csv("lab7q2.csv", show_col_types = FALSE) |>
+  clean_names() |>
+  mutate(subject = as.character(subject))
+
+dim(lab7q2)
+
+```
+
+## Preliminary Data Work {.unnumbered}
+
+### Assess Missingness {.unnumbered}
+
+I used `miss_case_table` and `miss_var_summary` to assess missing values in my `lab7q2` tibble. I have 903 subjects with no missing data and at least one missing value for 97 rows in `lab7q2.` 
+
+Variable `comor` is missing data for 5.9% of subjects, `age` is missing data for 2.8% of subjects, and `female` is missing data for 1.3% of subjects. I will assume that my data are missing at random (MAR) and use multiple imputation to deal with missing values. I want to fit more than 10 imputations since I'm missing about 10% of my data set. 
+
+```{r}
+
+miss_case_table(lab7q2) |> kbl() 
+
+miss_var_summary(lab7q2) |>
+  kbl() |>
+  kable_styling(full_width = FALSE, position = "center")
+
+```
+
+
+### Multiple Imputation {.unnumbered}
+
+I set a seed and used `aregImpute` to deal with missing data through multiple imputation. I included all of the variables in `lab7q2` other than `subject` and ran 20 imputations with 10 bootstrap samples to fit a linear model. 
+
+The results of my imputation model, `lab7q2_imp`, are printed below - I have 1000 observations and 5 predictors in `lab7q2_imp`, including the outcome. I imputed my missing values 20 times using predictive mean matching. I imputed 28 values for `age`, 59 values for `comor`, and 13 values for `female`. The $R^2$ values indicate that I wasn't able to impute these values very well.
+
+```{r}
+
+set.seed(4322023)
+dd <- datadist(lab7q2)
+options(datadist = "dd")
+
+lab7q2_imp <- 
+    aregImpute(~ alive + age + treated + comor + female, 
+               nk = c(0, 3), tlinear = TRUE, 
+               data = lab7q2, B = 10, n.impute = 20, pr = FALSE)
+
+lab7q2_imp
+
+```
+
+
+## Fit Logistic Regression Model {.unnumbered}
+
+I created `model1_mi` using the `fit.mult.impute` function. `model1_mi` is a logistic regression model, using multiply-imputed data, to predict vital status (`alive`) on the basis of the main effects of `treated`, `age`, `female`, and `comor`. The Nagelkerke $R^2$ (.436) indicates that `model1_mi` is generally an improvement over the null model and the C statistic (.858) suggests a moderately strong model. 
+
+```{r}
+
+model1_mi <- 
+    fit.mult.impute(alive ~ treated + age + female + comor, fitter = lrm, 
+                    xtrans = lab7q2_imp, data = lab7q2, x = TRUE, y = TRUE, 
+                    pr=FALSE)
+
+model1_mi
+
+```
+
+## Interpretting Effect of `treated` {.unnumbered}
+
+Compared to the control (`treated` = 0), receiving treatment (`treated` = 1) is associated with an estimated effect on the log odds of being alive at the end of the study of 1.43 with a 95% CI of (1.04, 1.81), holding all other predictors constant. The estimated effect of receiving treatment on the odds ratio of being alive is 4.16 with a 95% CI (2.83, 6.13) when compared to the control and after adjusting for the effects of `age`, `female`, and `comor`. The effect of treatment on the odds of being alive at the end of the study has a confidence interval for the odds ratio entirely above 1.
+
+I have two animals, a tiger and an elk. They are are the same age, the same sex, and exhibit the same number of comorbidities. However, the tiger receives treatment and the elk does not. Model `model1_mi` projects that the tiger's odds of being alive at the end of the study are 4.16 times larger than the odds of the elk being alive at the end of the study. After adjusting for `age`, `female`, and `comor`, treatment appears to be associated with an increased odds of being alive at the end of the study. 
+
+```{r}
+
+plot(summary(model1_mi))
+
+summary(model1_mi)
+
+```
+
+
+# Session Information {.unnumbered}
+
+```{r}
+
+xfun::session_info()
+
+```

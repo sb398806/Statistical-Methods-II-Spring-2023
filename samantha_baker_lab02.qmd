@@ -1,0 +1,483 @@
+---
+title: "Lab 02 for PQHS 432"
+author: "Samantha Baker"
+date: last-modified
+format: 
+  html:
+    toc: true
+    number-sections: true
+    code-fold: show
+    code-tools: true
+    code-overflow: wrap
+    embed-resources: true
+    date-format: iso
+    theme: default
+---
+
+## R Packages and Setup {.unnumbered}
+
+```{r}
+#| message: false
+#| warning: false
+
+knitr::opts_chunk$set(comment = NA) 
+
+library(janitor)
+library(knitr)
+library(kableExtra)
+library(mosaic)
+library(broom)
+library(naniar)
+library(patchwork)       
+library(survey)
+library(car)
+library(rsample)
+library(yardstick)
+library(equatiomatic)
+library(tidyverse) 
+
+theme_set(theme_bw()) 
+```
+
+# Question 1 {.unnumbered}
+
+For Question 1, I will examine the following research question: *Estimate the percentage of the US non-institutionalized adult population within the ages of 21-49 who engage in moderate-activity sports that would describe their General Health as either "Excellent" or "Very Good."*
+
+## Loading the Data for Question 1 {.unnumbered}
+
+I used the `read_rds` function to load the provided data set created from NHANES 2017-2018 Demographics and Questionnaire data. The resulting `lab2q1` tibble contains data on 5 variables for 2,295 subjects.
+
+```{r}
+
+lab2q1 <- read_rds("https://raw.githubusercontent.com/THOMASELOVE/432-data/master/data/lab2q1.Rds") 
+
+dim(lab2q1)
+
+```
+
+## Assessing & Dealing with Missingness {.unnumbered}
+
+I used the `summary` function to assess the missing values in my `lab2q1` tibble. Variable `hsd010` (General Health Condition) is missing for 159 subjects. For this study, I am willing to assume that these data are missing completely at random (MCAR) so conducting a complete case analysis is appropriate in this context.
+
+```{r}
+
+summary(lab2q1)
+
+```
+
+I used the `complete.cases` and `filter` functions to omit rows containing "NA" values from my data set. My filtered tibble, `lab2q1CC`, contains data on 5 variables for 2,136 subjects. I used the `mutate` and `fct_recode` functions to rename the values of those variables with more meaningful labels.
+
+```{r}
+
+lab2q1CC <-  lab2q1 |>
+  filter(complete.cases(hsd010)) |>
+  mutate(paq665 = fct_recode(factor(paq665), "Yes"="1", "No"="2")) |>
+  mutate(hsd010 = fct_recode(factor(hsd010), "Excellent"="1", "Very Good"="2", 
+                             "Good"="3", "Fair"="4", "Poor"="5"))
+
+summary(lab2q1CC)
+
+```
+
+## My `lab2q1CC` Analytic Sample: Variables {.unnumbered}
+
+I used the `tabyl` function to display the counts of General Health Condition (`hsd010`) among those subjects who responded to the moderate-intensity sports question (`paq665`).
+
+```{r}
+
+lab2q1CC |> tabyl(paq665, hsd010) |> 
+  adorn_totals(where = c("row", "col")) |> adorn_title() |>
+  kable() |>
+  kable_classic()
+
+```
+
+
+I used the `favstats` function to look at the range of weights in my analytic sample. I have subjects representing as few as \~4,300 people to just under 388,000 people.
+
+```{r}
+
+favstats(~ wtint2yr, data = lab2q1CC) |>
+  rename(na = missing) |>
+  kable(digits = 1) |>
+  kable_classic()
+
+```
+
+## Creating `lab2_design` Survey Design {.unnumbered}
+
+I used the function `svydesign` to establish the following elements of my survey design: (1) data set: `lab2q1CC`, (2) weights: `wtint2yr`, and (3) subject IDs: `seqn`.
+
+```{r}
+#| echo: true
+
+lab2_design <- 
+    svydesign(
+        id = ~ seqn,
+        weights = ~ wtint2yr,
+        data = lab2q1CC) 
+
+lab2_design <- update(lab2_design, one = 1) 
+
+```
+
+## Unweighted Counts {.unnumbered}
+
+I used the `svyby` function to examine unweighted counts within my sample of 2,136 subjects. I have 943 subjects who answered "Yes" to the moderate-intensity sports question and 1,193 subjects who answered "No." 223 subjects rated their general health as "Excellent" and 537 rated their general health as "Very Good." All other subjects chose "Good", "Fair", or "Poor" to describe their general health condition. I'm interested in subjects who answered "Yes" to the moderate-intensity sports question and who rated their general health as either "Excellent" or "Very Good." 402 subjects meet those criteria with 118 in the "Excellent" category and 284 in the "Very Good" category.
+
+```{r}
+#| echo: true
+
+svyby( ~ one, ~ paq665, lab2_design, unwtd.count)|>
+  kable() |>
+  kable_classic()
+
+svyby( ~ one, ~ hsd010, lab2_design, unwtd.count)|>
+  kable() |>
+  kable_classic()
+
+svyby( ~ one, ~ paq665 + hsd010, lab2_design, unwtd.count)|>
+  kable() |>
+  kable_classic()
+
+```
+
+## Weighted Counts {.unnumbered}
+
+I used the `svytotal` and `svyby` functions to examine the weighted counts of the generalizable population represented in my sample, overall and by groups. The weighted counts, using this survey design, describe a population of over 107 million people within the age range of 21-49 years.
+
+I'm interested in the population of US non-institutionalized adults within the ages of 21-49 who engage in moderate-activity sports and who would describe their General Health as either "Excellent" or "Very Good." Of those who engage in moderate-activity sports, nearly 24.6 million would describe their General Health as either "Excellent" (about 6.8 million) or "Very Good" (17.8 million).
+
+```{r}
+#| echo: true
+
+svytotal( ~ one, lab2_design )|>
+  kable() |>
+  kable_classic() 
+
+svyby( ~ one, ~ paq665 * hsd010, lab2_design, svytotal)|>
+  kable() |>
+  kable_classic()
+
+```
+
+## Part A: Unweighted Estimate {.unnumbered}
+
+Using my sample of 2,136 subjects, my point estimate of the true population percentage of the US non-institutionalized adult population within the ages of 21-49, who engage in moderate-activity sports, and would describe their General Health as either "Excellent" or "Very Good" is 42.6% with a 90% confidence interval of (40%, 45.3%). I used the Wald test to generate my confidence interval.
+
+```{r}
+
+lab2q1CC |>
+  tabyl(paq665, hsd010) |>
+  adorn_totals(where = c("row", "col")) |> 
+  adorn_percentages(denominator = "row") |>
+  adorn_pct_formatting(digits = 1) |>
+  adorn_ns(position = "front") |>
+  kable() |>
+  kable_classic()
+
+m_wald <- binom.test(x = 402, n = 943,
+                     conf.level = 0.90,
+                     ci.method = "Wald")
+
+tidy(m_wald) |> 
+  select(estimate, conf.low, conf.high, statistic, parameter) |>
+  kbl(digits = 3) |> kable_classic(full_width = F)
+
+```
+
+## Part B: Weighted Estimate {.unnumbered}
+
+Accounting for the sampling weights used in `wtint2yr`, my estimate of the true population percentage of the US non-institutionalized adult population within the ages of 21-49, who engage in moderate-activity sports, and would describe their General Health as either "Excellent" or "Very Good" is 47.9% with 13.2% in the "Excellent" category with 90% confidence interval (10.5%, 15.9%) and 34.7% in the "Very Good" category with 90% confidence interval (31.2%, 38.3%).
+
+```{r}
+
+svyby(~hsd010, ~paq665, lab2_design, svymean, ran.rm=TRUE) |>
+  kable() |>
+  kable_classic()
+
+grouped_result <- svyby(~hsd010, ~paq665, lab2_design, svymean, ran.rm=TRUE)
+
+confint(grouped_result, level=.9) |>
+  kable() |>
+  kable_classic()
+
+```
+
+# Question 2 {.unnumbered}
+
+## Loading the Data for Question 2 {.unnumbered}
+
+I used the `read_cvs` function to load the provided data set. The resulting `hbp3456` tibble contains data on 23 variables for 3,456 subjects. I converted `insurance` and `betab` into factors using `mutate.` I used the `identical` function to check that the number of unique record IDs, `record`, matched the number of rows in my `hbp3456` tibble. I have a unique identifier for each row in my data set.
+
+```{r}
+
+hbp3456 <- read_csv("https://raw.githubusercontent.com/THOMASELOVE/432-data/master/data/hbp3456.csv", show_col_types = FALSE) |>
+  clean_names() |>
+  mutate(record = as.character(record))  |>
+  mutate(insurance = factor(insurance),
+         betab = factor(betab)) 
+
+dim(hbp3456)
+
+identical(nrow(hbp3456), n_distinct(hbp3456$record))
+
+```
+
+## Assessing & Dealing with Missingness {.unnumbered}
+
+I used the `miss_var_summary` function to assess the missing values in my `hbp3456` tibble. Eight variables contain missing data. For this study, I am willing to assume that these data are missing completely at random (MCAR) so conducting a complete case analysis is appropriate in this context.
+
+```{r}
+
+miss_var_summary(hbp3456)
+
+```
+
+I used the `complete.cases` and `filter` functions to omit rows containing "NA" values from my data set. I used the `select` function to include only those variables I will use to build my models. These include subject ID numbers (`record`), primary insurance type (`insurance`), systolic blood pressure (`sbp`), and the presence/absence of a beta-blocker prescription (`betab`). My filtered tibble, `hbp3456CC`, contains data on those four variables for 2,859 subjects.
+
+```{r}
+
+hbp3456CC <-  hbp3456 |>
+  filter(complete.cases(ldl, eth_hisp, income, weight, height, race, tobacco)) |>
+  select(record, insurance, sbp, betab)
+
+miss_var_summary(hbp3456CC)
+
+hbp3456CC
+
+```
+
+## Part A {.unnumbered}
+
+For Question 2, Part A, I will examine the following research question: *Does a person's insurance status seem to have a meaningful impact on their systolic blood pressure, adjusting for whether or not they have a beta-blocker prescription?*
+
+### Splitting Sample {.unnumbered}
+
+I set a seed and used the `initial_split` function to create training and testing samples (`train_hbp` and `test_hbp`, respectively) from my `hbp3456CC` data set. I used the `nrow` function to examine the number of rows in each sample. `train_hbp` contains 2,144 subjects (75% of `hbp3456CC`) and `test_hbp` contains 715 subjects (25% of `hbp3456CC`).
+
+```{r}
+
+set.seed(012923)
+
+hbp3456CC_split <- initial_split(hbp3456CC, prop = 3/4)
+train_hbp <- training(hbp3456CC_split)
+test_hbp <- testing(hbp3456CC_split)
+
+c(nrow(hbp3456CC), nrow(train_hbp), nrow(test_hbp))
+
+```
+
+### Visualizing the Outcome Distribution {.unnumbered}
+
+I used `ggplot` to visualize the distribution of my outcome variable, `sbp`, using my training sample, `train_hbp`. I created a boxplot with violin, a histogram with Normal distribution curve superimposed, and a Normal Q-Q plot. All three plots display an issue with right skew in my outcome data and indicate that I should consider applying an appropriate transformation to my outcome variable before building my models.
+
+```{r}
+
+res <- mosaic::favstats(~ sbp, data = train_hbp)
+bin_w <- 5 
+
+p1 <- ggplot(train_hbp, aes(x = sbp)) + 
+    geom_histogram(binwidth = bin_w, col = "navy", fill = "lightblue", bins = 20) +
+  stat_function(fun=function(x) 
+    dnorm(x, mean=res$mean, sd=res$sd)*res$n*bin_w, col="navy", 
+    linewidth=1.5)+
+    labs(x = "Systolic Blood Pressure (mmHg)", y = "# of subjects")
+
+p2 <- ggplot(train_hbp, aes(x = "", y = sbp)) +
+  geom_violin(alpha = 0.3) +
+  geom_boxplot(width = 0.25, fill = "lightblue", outlier.color = "navy", 
+               notch = TRUE)  + 
+  coord_flip() +
+   labs(x = "", y = "Systolic Blood Pressure (mmHg)")
+
+p3 <- ggplot(train_hbp, aes(sample = sbp)) +
+  geom_qq(col = "navyblue") + geom_qq_line() +
+    labs(x = "", y = "Systolic Blood Pressure (mmHg)")
+
+p1 + p3 - p2 + plot_layout(ncol = 1, height = c(3, 1)) +
+  plot_annotation(title = "Visualizing SBP Outcome")
+
+
+```
+
+### Exploring Possible Transformations {.unnumbered}
+
+I used the `boxCox` function to assess whether or not I should apply a transformation to my outcome variable, `sbp`. I used the `powerTransform` function to calculate the point estimate as well. The estimated power transformation is less than -.02 which is very close to 0, suggesting that a log transformation of `sbp` would be useful in building my models.
+
+```{r}
+
+model_temp <- lm(sbp ~ insurance + betab,
+                 data = train_hbp)
+
+boxCox(model_temp)
+
+powerTransform(model_temp)
+
+```
+
+### Visualizing the Outcome Distribution After Log Transformation {.unnumbered}
+
+I used `ggplot` to visualize the distribution of my outcome variable, `sbp`, after applying a log transformation to the data in my training sample. I created a boxplot with violin, a histogram with Normal distribution curve superimposed, and a Normal Q-Q plot. All three plots confirm that the Normal model is a better fit for the logarithm of `sbp` values than it is to the raw `sbp` values. To build my models, I will use log(`sbp`) as my outcome variable.
+
+```{r}
+
+res <- mosaic::favstats(~ log(sbp), data = train_hbp)
+bin_w <- .05
+
+p1 <- ggplot(train_hbp, aes(x = log(sbp))) + 
+    geom_histogram(binwidth = bin_w, col = "navy", fill = "lightblue") + 
+     stat_function(fun=function(x) dnorm(x, mean=res$mean, 
+                                         sd=res$sd)*res$n*bin_w, col="navy", 
+                     linewidth=1.5) + 
+  labs(x = "Systolic Blood Pressure (mmHg)", y = "# of subjects")
+
+p2 <- ggplot(train_hbp, aes(x = "", y = log(sbp))) +
+  geom_violin(alpha = 0.3) +
+  geom_boxplot(width = 0.25, fill = "lightblue", outlier.color = "navy", 
+               notch = TRUE)  + 
+  coord_flip() +
+   labs(x = "", y = "Systolic Blood Pressure (mmHg)")
+
+p3 <- ggplot(train_hbp, aes(sample = log(sbp))) +
+  geom_qq(col = "navyblue") + geom_qq_line() +
+    labs(x = "", y = "Systolic Blood Pressure (mmHg)")
+
+p1 + p3 - p2 + plot_layout(ncol = 1, height = c(3, 1)) +
+  plot_annotation(title = "Visualizing SBP Outcome")
+
+```
+
+### Log(`sbp`) means by `insurance` and `betab` {.unnumbered}
+
+I used the `group_by` and `summarize` functions to create a summary of the mean values of log(`sbp`) within each combination of `insurance` and `betab`. The intergroup range of mean log(`sbp`) values isn't very large, ranging between 4.87 - 4.90.
+
+```{r}
+#| message: false
+
+summaries_2 <- train_hbp |>
+    group_by(insurance, betab) |>
+    summarize(n = n(), mean = mean(log(sbp)), sd = sd(log(sbp)))
+summaries_2 |> kable(digits = 2)
+              
+```
+
+### Interaction Plot {.unnumbered}
+
+I used `ggplot` to create an interaction plot, displaying the observed mean values of log(`sbp`) within each `insurance`-`betab` combination to help decide whether my model should include an interaction term. 
+
+Overall, subjects with beta-blocker prescriptions display higher observed values of mean log(`sbp`) than subjects without beta-blocker prescriptions for every insurance type. The two lines on my plot appear to trend in similar directions; they don't cross but are also not parallel to each other. There appear to be meaningful looking differences between the insurance groups that change depending on the subject's beta-blocker group. For example, subjects with Medicaid and no beta-blocker prescription have an increased mean log(`sbp`) whereas subjects with commercial insurance, Medicare, and no insurance exhibit more similar values for mean log(`sbp`). Uninsured subjects with beta-blocker prescriptions display a decreased mean log(`sbp`) whereas subjects with commercial insurance, Medicare, and Medicaid appear more similar to each other. 
+
+This plot suggests that I should further explore adding an interaction term to my model. Whether a subject's `insurance` type has a meaningful impact on their systolic blood pressure appears to depend a bit on whether or not they also have a beta-blocker prescription. I will investigate models both with and without an interaction term to see if it makes a difference in the quality of fit for predicting log(`sbp`).
+
+```{r}
+
+ggplot(summaries_2, aes(x = insurance, y = mean, 
+                        col = factor(betab))) +
+  geom_point(size = 2) +
+  geom_line(aes(group = factor(betab))) +
+  scale_color_viridis_d(option = "D", end = 0.5) +
+  labs(title = "Observed Means of log(SBP)",
+       subtitle = "by Insurance and Beta-Blocker Prescription",  
+       x = "Type of Insurance", y = "mean log(SBP)")
+
+```
+
+### Building Model without Interaction {.unnumbered}
+
+I used the `lm` function to build `model1` predicting log(`sbp`) using `insurance` and `betab` without an interaction term.
+
+```{r}
+
+model1 <- lm(log(sbp) ~ insurance + betab, data = train_hbp)
+
+```
+
+### Building Model with Interaction {.unnumbered}
+
+I used the `lm` function to build `model1_int` predicting log(`sbp`) using `insurance` and `betab`, including an interaction term.
+
+```{r}
+
+model1_int <- lm(log(sbp) ~ insurance * betab, data = train_hbp)
+
+```
+
+### Comparing Quality of Fit {.unnumbered}
+
+I used the `glance` and `bind_rows` functions to assess quality of fit measures for `model1` and `model1_int` and to compare model performance within my training sample, `train_hbp.` Neither model shows much promise with each one accounting for less than 1% of the variability (about .9%) of log(`sbp`). R\^2 is just barely stronger for `model1_int`, reflecting a tendency for R^2 to increase as more parameters are added to a regression model. Adjusted R\^2 is the slightest bit stronger for `model1` and the two residual standard deviations are the same for both models (.12). AIC and BIC are both smaller for `model1`. 
+
+From these quality of fit measures, it appears that `model1`, without an interaction term, performs just the tiniest bit better in my training sample than `model1_int`.
+
+```{r}
+
+bind_rows(glance(model1), glance(model1_int)) |> 
+    mutate(mod = c("model1", "mode1_int")) |>
+    select(mod, r.sq = r.squared, adj.r.sq = adj.r.squared, 
+       sigma, nobs, df, df.res = df.residual, AIC, BIC) |>
+    kable(digits = c(0, 4, 3, 3, 0, 0, 0, 1, 1))
+
+```
+
+### ANOVA of `model1` & `model1_int` {.unnumbered}
+
+I ran an ANOVA on `model1` and `model1_int` to look at the fraction of the overall sums of squares accounted for by the interaction term and whether there was an improvement over `model1`. Some of the variation in log(`sbp`) is explained by `insurance` (SS(`insurance`) = .066) and SS(`betab`) adds another .217. 
+
+Adding the interaction term to the main effects doesn't meaningfully improve the model with SS(interaction) = .02. With an F-statistic of .73, the interaction term accounts for an amount of variability that isn't necessarily beyond what I might have expected from random chance.
+
+```{r}
+
+tidy(anova(model1)) |>
+  kable (dig = c(0,0,3,2,2,3))
+
+tidy(anova(model1_int)) |>
+  kable (dig = c(0,0,3,2,2,3))
+
+```
+
+### Model of Choice {.unnumbered}
+
+My model of choice for predicting log(`sbp`) is `model1`, without an interaction term. While the interaction plot I created suggested that an interaction term was worth considering, `model1` performed better on more quality of fit measures than `model1_int`. According to my ANOVA results, adding the interaction term did not account for an amount of variability in log(`sbp`) that was statistically detectable from random chance or meaningfully improved from `model1.`
+
+A person's insurance status does not seem to have a meaningful impact on their systolic blood pressure after adjusting for whether they have a beta-blocker prescription.
+
+```{r}
+
+model1 <- lm(log(sbp) ~ insurance + betab, data = train_hbp)
+
+extract_eq(model1, use_coefs = TRUE, coef_digits = 4,
+           terms_per_line = 2, wrap = TRUE, ital_vars = TRUE)
+
+```
+
+###  Model Coefficients {.unnumbered}
+
+I used `tidy` to display `model1` coefficients with 90% confidence intervals.
+
+```{r}
+
+tidy(model1, conf.int=TRUE, conf.level = .9) |>
+  kable(digits = c(0,3,3,3,3,3,3))
+
+```
+
+
+## Part B {.unnumbered}
+
+Before building my models, I created an interaction plot to examine the unadjusted outcome means for log(`sbp`) stratified by `insurance` and `betab.` From my interaction plot, it looked like including an interaction term in my model might be worth exploring. 
+I built two models to assess whether a person's insurance status seems to have a meaningful impact on their systolic blood pressure after adjusting for whether or not they have a prescription beta-blocker. My first model, `model1`, did not include an interaction term between insurance status and beta-blocker prescription. My second model, `model1_int`, included an interaction term between the aforementioned variables. 
+
+After examining various quality of fit measures and comparing `model1` with `model1_int`, my chosen model was `model1`, without the interaction term. Unfortunately, neither model performed well in predicting my outcome variable, log(`sbp`) within my test sample, accounting for less than 1% of the variability in my outcome variable. I selected `model1` as it is a simpler model and because `model1_int` did not demonstrate any meaningful improvement over `model1` in accounting for the variability of my outcome. In addition, `model1` performed marginally better than `model1_int` across almost every quality of fit measure. 
+
+`Model1` suggests that, regardless of insurance status, the difference in log(`sbp`) between those with and without beta-blocker prescriptions is .021. Suppose I have two subjects, Bill and Jill, who both have the same type of insurance. If Bill has a beta-blocker prescription and Jill does not, I would expect Bill to have a log(`sbp`) that is .021 higher than Jill's. 
+
+Next steps would include considering the testing sample for fairer comparisons, using `model1` to make predictions of log(`sbp`) in the test sample, calculating prediction errors, and validating R^2 measures to see how the model performs in that setting.
+
+
+# Session Information {.unnumbered}
+
+```{r}
+
+xfun::session_info()
+
+```

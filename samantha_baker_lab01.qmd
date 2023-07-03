@@ -1,0 +1,294 @@
+---
+title: "Lab 01 for PQHS 432"
+author: "Samantha Baker"
+date: last-modified
+format: 
+  html:
+    toc: true
+    number-sections: true
+    code-fold: show
+    code-tools: true
+    code-overflow: wrap
+    embed-resources: true
+    date-format: iso
+    theme: default
+editor: 
+  markdown: 
+    wrap: 72
+---
+
+# R Packages and Setup
+
+```{r}
+#| message: false
+#| warning: false
+knitr::opts_chunk$set(comment = NA)
+library(janitor)
+library(knitr)
+library(broom)
+library(kableExtra)
+library(car)
+library(equatiomatic)
+library(tidyverse) 
+theme_set(theme_bw())
+```
+
+# Loading the Data
+
+I used the `read_csv` function to load the provided data set containing data on Ohio's 88 counties from the 2022 County Health Rankings report. The
+resulting `oh22` tibble contains data on 43 variables for 88 counties.
+
+```{r}
+
+oh22 <- 
+  read_csv("https://raw.githubusercontent.com/THOMASELOVE/432-data/master/data/oh_counties_2022.csv", 
+           show_col_types = FALSE) |>
+  clean_names() |>
+  mutate(fips = as.character(fips))
+
+dim(oh22)
+
+```
+
+# Question 1
+
+## Selecting My Variables
+
+I used the `select` function to choose the variables I will use in building my visualization. I used the `describe` function to display numerical summaries for each variable.
+
+```{r}
+
+oh22new <- oh22 |>
+  select(fips, county, hsgrads, freq_mental_distress, population)
+
+Hmisc::describe(oh22new)
+
+```
+
+
+## Creating Binary Categorical Variable
+
+I used the `mutate` and `case_when` functions to create a binary categorical variable, `pop_50K`, using the `population` variable. `pop_50K` specifies whether a county's population is less than 50,000 residents or 50,000+ residents. I used `fct_relevel` to ensure that "below50K" appears first in numerical summaries and visualizations. I used `favstats` to create a numerical summary of the `pop_50K` variable. There are 39 counties in Ohio with a population below 50,000 (mean county population around 32,740). There are 49 counties in Ohio with a population of 50,000 or more (mean county population around 212,579). I also looked at how `hsgrads` and `freq_mental_distress` varies by population size. `oh22new` now contains six variables for Ohio's 88 counties, with the addition of `pop_50K` to the tibble.
+
+```{r}
+#| message: false
+oh22new <- oh22new |>
+  mutate(pop_50K = case_when(population <50000 ~ "below50K", 
+                             TRUE ~ "50K+"), pop_50K = factor(pop_50K)) |>
+  mutate(pop_50K = fct_relevel(pop_50K, "below50K", "50K+"))
+
+mosaic::favstats(population ~ pop_50K, data = oh22new) |> 
+    kable(digits = 3)|> kable_classic()|>
+    footnote(general = "Population size summary for Ohio counties with fewer than 50,000 residents and counties with 50,000+ residents.")
+
+mosaic::favstats(hsgrads ~ pop_50K, data = oh22new) |> 
+    kable(digits = 3)|> kable_classic() |>
+    footnote(general = "Numerical summary of high school graduation rates for Ohio counties by population size.")
+
+mosaic::favstats(freq_mental_distress ~ pop_50K, data = oh22new) |> 
+    kable(digits = 3)|> kable_classic()|>
+    footnote(general = "Numerical summary of frequent mental distress rates for Ohio counties by population size.")
+
+```
+## My Tibble
+
+My `oh22new` tibble contains data on 6 variables for each of Ohio's 88 counties including the county's unique ID code and name (`fips` and `county`, respectively), high school graduation rate (`hsgrads`), the percent of the county's adult population reporting frequent mental distress (`freq_mental_distress`), the size of the county's population (`population`), and the `pop_50K` variable I created above.
+
+```{r}
+
+oh22new
+
+```
+
+## Data Visualization
+
+I used `ggplot` to visualize the relationship between high school graduation rates and rates of frequent mental distress among Ohio counties to examine whether different patterns emerged for counties with populations below 50,000 and counties with populations of at least 50,000 residents.
+
+```{r}
+
+names <- c('50K+' = "County Population at or above 50,000", 
+           'below50K' = "County Population Below 50,000")
+
+ggplot(oh22new, aes(x = hsgrads , y =  freq_mental_distress, col = pop_50K)) +
+    geom_point(size=2) +
+    scale_color_brewer(palette = "Dark2", guide = "none")+
+    facet_wrap(~ pop_50K, labeller = as_labeller(names)) +
+    geom_smooth(method = "lm", se = FALSE, 
+                formula = y ~ x, col = "black") +
+   geom_smooth(method = "loess", 
+                formula = y ~ x, col = "blue") +
+    guides(color = "none") +
+    theme(strip.text = element_text(face="bold", size=rel(1), color="black"),
+          strip.background = element_rect(fill="gray")) +
+    labs(title = "Frequent Mental Distress vs HS Graduation, by County Population", 
+         subtitle = "in Ohio's 88 Counties, Using County Health Rankings 2022", 
+         x="County HS Graduation Rate (%)", 
+         y="Rate of Frequent Mental Distress (%)",  
+         caption = "Note: An increase in high school graduation rates is associated 
+         with a decrease in the percentage of county residents (adults) reporting 
+         frequent mental distress for Ohio counties with fewer than 50,000 
+         residents and counties with populations of 50,000 or more. This 
+         relationship appears stronger for counties with populations of at 
+         least 50,000 residents.")
+
+```
+
+# Question 2
+
+## Selecting My Variables
+I used the `select` function to choose the variables I will use to build my models. I used `mutate` to create variable `med_income_div`, dividing the values of `median_income` by 1000 to make them more interpretable in my models. I used the `describe` function to display numerical summaries for each variable.
+
+```{r}
+
+oh22sample <- oh22 |>
+  select(fips, county, obese_pct, food_env, median_income) |>
+   mutate (med_income_div = median_income/1000)
+
+Hmisc::describe(oh22sample)
+
+```
+
+
+
+## My Tibble
+My `oh22sample` tibble contains data on 6 variables for each of Ohio’s 88 counties including the county’s unique ID code and name (`fips` and `county`, respectively), percent of the county's adult population reporting a body mass index (BMI) or 30 or more (`obese_pct`), county access to healthy foods (`food_env`), the county’s estimated median (`median_income`), and `med_income_div` (median income divided by 1000).
+
+```{r}
+
+oh22sample
+
+```
+
+## Fitting `model1`
+
+I built `model1`, a linear regression model, to predict my outcome variable, `obese_pct`, the percentage of the adult county population reporting a BMI of 30 or more, as a function of the county's food environment index (`food_env`) and  median income (`med_income_div`). 
+
+```{r}
+
+model1 <- lm(obese_pct ~ food_env + med_income_div, data = oh22sample)
+
+extract_eq(model1, use_coefs=TRUE, coef_digits=3)
+
+```
+
+## Explaining the `food_env` coefficient
+
+If Ohio County A and Ohio County B have the same median income, but Ohio County A's food environment index ranking is one point higher than Ohio County B's ranking, then `model1` predicts that the percentage of Ohio County A's adult population reporting a BMI of 30 or more will be .072% higher than that of Ohio County B's.
+
+I used `tidy` to specify the coefficients for `model1` with 90% confidence intervals. The 90% confidence interval for the estimate for the slope of `food_env` includes zero, indicating that I can't be confident about the direction of the effect of `food_env` on my outcome variable, `obese_pct.` That is, after accounting for median income, an increase in a county's food environment index ranking might be associated with an increase, a decrease, or no change in that county's percentage of adults reporting a BMI of 30 or more.
+
+
+```{r}
+
+tidy(model1, conf.int = TRUE, conf.level = 0.90) |>
+  select(term, estimate, conf.low, conf.high) |>
+  kable(digits = 3)
+
+```
+
+## Checking Regression Assumptions for `model1`
+
+I used the `par` and `plot` functions to create four plots assessing `model1`'s adherence to regression modeling assumptions including linearity of the association, normality of the residuals, constant variance, and independence. The top left plot displays residuals vs fitted values of my outcome, `obese_pct`. This plot indicates a potential problem with constant variance as evidenced by a fan shape showing much more variation at the right end of the fitted values. This suggests that I should explore whether a transformation of my outcome or predictor variables would be warranted. I will assess the need for transformation in a subsequent step. The top right plot displays a Normal Q-Q plot of the standardized regression residuals for `model1.` I'm not seeing any real issues with skew or outliers. All of the points fall within [+]{.underline}3 standard deviations of the mean which is what I would expect. The cases flagged as potential outliers on the Normal Q-Q plot include 4, 5, and 32 (Ashtabula, Athens, and Hancock Counties, respectively). I will review potential outliers in a subsequent step. From my scale-location plot on the bottom left, I see a possible issue with equal variance as the loess smooth does trend downward and the points appear in something of a fan shape, as we move from 32 to 38. With my small sample size, though, I'm not sure this is worth worrying about too much. Finally, the bottom right plot is the residuals vs leverage plot. Here, I am looking for points whose leverage is at least 3 times as large as the average leverage value (in my case, 3/88 or .034 [3 coefficients fit by `model1` and 88 observations]). I will identify points with substantial leverage in a subsequent step. The plot also shows that none of the points are exerting substantial influence on `model1` (that is, none have a Cook's distance of at least .5). 
+ 
+
+```{r}
+#| fig-height: 8
+
+par(mfrow=c(2,2)); plot(model1); par(mfrow = c(1,1))
+
+```
+## Assess Need for Transformation of Outcome
+
+My residuals vs fitted values plot suggested that transforming my outcome variable, `obese_pct`, might improve adherence to regression assumptions. To assess this, I used the `boxCox` function to develop a Box-Cox plot and the `powerTransform` function to calculate the point estimate. The estimated power transformation is about 1.77. Being closest to 2, the Box-Cox suggests that squaring `obese_pct` might be useful in improving the fit of my models.
+ 
+```{r}
+
+model_temp <- lm(obese_pct ~ food_env + med_income_div,
+                 data = oh22sample)
+
+boxCox(model_temp)
+
+powerTransform(model_temp)
+
+```
+
+## Reviewing Potential Outliers
+
+By default, the `plot` function identifies three cases for potential outliers. Ashtabula, Athens, and Hancock Counties were identified by the above residual plots. The standardized residuals for these three counties were 2.25, -2.57, and -2.56, respectively, all of which fall within [+]{.underline}3 standard deviations of the mean as expected. I'm not concerned about outliers in this case.
+
+```{r}
+
+model1_aug <- augment(model1, data = oh22sample)
+
+model1_aug |> slice(4, 5, 32) |>
+  select(county, obese_pct, .fitted, .resid, .std.resid, everything())
+
+```
+## Identifying Case with Substantial Leverage
+
+To obtain the county with the largest leverage value, I used the `augment` function. Delaware County has substantial leverage in `model1` with a value of .317 (more than 9 times as large as the average leverage value of .034). 
+
+```{r}
+
+model1_aug <- augment(model1, data = oh22sample)
+
+model1_aug |> slice_max(.hat) |>
+  select(county, .hat, .resid, .fitted, .cooksd, everything())
+
+```
+
+## Fitting `model2`
+
+I built `model2`, a linear regression model, to predict my outcome variable, `obese_pct`, as a function of `food_env`. 
+
+```{r}
+
+model2 <- lm(obese_pct ~ food_env, data = oh22sample)
+
+extract_eq(model2, use_coefs=TRUE, coef_digits=3)
+
+```
+
+## Comparing `model1` to `model2`
+
+I used the `glance` function to build two tibbles that include the key quality of fit measures for `model1` (`temp_a`) and `model2` (`temp_b`). I used `bind_rows` to combine `temp_a` and `temp_b` into one new tibble, `model_comp`, to compare model performance within the complete sample of Ohio's 88 counties.
+
+-   **R\^2**: R\^2 is stronger for `model1.` This isn't surprising as `model1` contains more predictors and R\^2 tends to increase as more independent variables are included in a regression model. `model1` accounts for just under 29% of the variation that I see in `obese_pct` using `food_env` and `med_income_div` while `model2` accounts for about 15% of the variation in `obese_pct` using `food_env` alone.
+
+-   **adjusted R\^2**: Adjusted R\^2 is also stronger for `model1` than it is for `model2` (.27 vs .14) reflecting an adjustment for the increased number of terms in `model1.`
+
+-   **sigma**: Sigma is lower for `model1` but the two residual standard deviations don't vary greatly between the models.
+
+-   **AIC**: `model1` has the smallest AIC.
+
+-   **BIC**: `model1` has the smallest BIC.
+
+It appears that `model1` with two predictors: `food_env` and `med_income_div`, fits the Ohio 2022 data more effectively than `model2` within the complete sample of Ohio's 88 counties as indicated by the five measures of fit I detailed above.
+
+```{r}
+
+temp_a <- glance(model1) |> 
+  select(-logLik, -deviance) |>
+  round(digits = 3) |>
+  mutate(modelname = "model1 (food_env + med_income_div)")
+
+temp_b <- glance(model2) |>
+  select(-logLik, -deviance) |>
+  round(digits = 3) |>
+  mutate(modelname = "model2 (food_env only)")
+
+model_comp <- bind_rows(temp_a, temp_b) |>
+  select(modelname, nobs, df, r.squared, adj.r.squared, sigma, AIC, BIC)
+
+model_comp |> 
+  kable() |>
+  kable_classic()
+
+```
+
+
+# Session Information
+
+```{r}
+xfun::session_info()
+```
