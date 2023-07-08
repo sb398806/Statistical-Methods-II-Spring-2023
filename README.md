@@ -1,5 +1,5 @@
 # Statistical-Methods-II-Spring-2023
-Repository of code for labs assignments completed for PQHS 432, the second half of a two-semester sequence. Lab assignments required demonstrations of mastery for core principles and fundamental skills with a few requiring deeper dives into material that was more technically sophisticated. Using R and R Studio, I demonstrated my ability to clean, visualize, and analyze provided data sets and producing attractive Quarto documents.
+Repository of code for lab assignments completed for PQHS 432, the second half of a two-semester sequence. Lab assignments required demonstrations of mastery for core principles and fundamental skills with a few requiring deeper dives into more technically sophisticated material. Using R and R Studio, I demonstrated my ability to clean, visualize, and analyze provided data sets and produce attractive Quarto documents.
 
 **Key topics included:**
 -  Using modern data science tools to import, tidy/manage, explore, visualize, and communicate about data
